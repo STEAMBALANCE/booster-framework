@@ -13,6 +13,7 @@ import type {
   SteamPopupConstructor,
 } from './popup-types';
 import { composeWrapperHtml } from './window-wrapper';
+import type { RelayAuthToken } from './auth';
 
 interface PopupTemplate {
   Ctor: SteamPopupConstructor;
@@ -127,6 +128,7 @@ interface CreateSteamWindowArgs {
   centerOnMain: boolean;
   iframeBackground?: string;
   embedOrigins?: string[];
+  relayAuthToken?: RelayAuthToken;
 }
 
 export function createSteamWindow(args: CreateSteamWindowArgs):
@@ -146,6 +148,7 @@ export function createSteamWindow(args: CreateSteamWindowArgs):
     content:  args.content,
     iframeBackground: args.iframeBackground,
     embedOrigins: args.embedOrigins,
+    relayAuthToken: args.relayAuthToken,
   });
 
   // Compute centered position UPFRONT so the popup opens already-centered

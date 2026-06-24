@@ -45,6 +45,10 @@ let nextId = 1;
 const pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: unknown) => void }>();
 
 export function createBridge(transport?: BridgeTransport): Bridge {
+  const capturedNativeBridge = !transport && typeof window.__sb_native === 'function'
+    ? window.__sb_native
+    : undefined;
+
   window.__sb_resolve = (id: number, resp: BridgeResponse) => {
     const p = pending.get(id);
     if (!p) return;
@@ -57,10 +61,11 @@ export function createBridge(transport?: BridgeTransport): Bridge {
     if (transport) {
       transport.send(payload);
     } else {
-      if (typeof window.__sb_native !== 'function') {
+      const nativeBridge = capturedNativeBridge ?? window.__sb_native;
+      if (typeof nativeBridge !== 'function') {
         throw new Error('native bridge not installed');
       }
-      window.__sb_native(payload);
+      nativeBridge(payload);
     }
   }
 
@@ -104,11 +109,25 @@ export function createBridge(transport?: BridgeTransport): Bridge {
       if (transport) {
         transport.send(envelope);
       } else {
-        if (typeof window.__sb_native !== 'function') {
+        const nativeBridge = capturedNativeBridge ?? window.__sb_native;
+        if (typeof nativeBridge !== 'function') {
           throw new Error('native bridge not installed');
         }
-        window.__sb_native(envelope);
+        nativeBridge(envelope);
       }
     },
   };
+}
+
+export function hideNativeBridgeGlobal(): void {
+  try {
+    Object.defineProperty(window, '__sb_native', {
+      value: undefined,
+      writable: true,
+      configurable: true,
+    });
+  } catch {
+    // If the native side made the slot non-configurable, the framework cannot
+    // hide it client-side; native authorization must still reject bad calls.
+  }
 }
