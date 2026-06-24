@@ -76,6 +76,15 @@ steambooster.exe hot-updates inside Steam. Live changes land in
 
 ## Conventions
 
+**Commit messages.** Conventional Commits / git-flow style (global rule
+for all 4 repos; canonical in `../booster-injector/CLAUDE.md`). Use a type
+prefix (`feat:`, `fix:`, `chore:`, `docs:`, `refactor:`, `test:`, `build:`,
+`ci:`, `perf:`, …) with an optional scope, e.g. `fix(relay): …`. Subject in
+lowercase — don't capitalize the first word; capitals only where the
+language demands them (proper nouns, acronyms). Keep it laconic and clear,
+not a wall of text; English only. A body is optional and brief — add one
+only when the *why* isn't obvious from the subject.
+
 **Public API surface — `src/api/api-types.ts` is canonical.** Any
 breaking change here (renamed field, changed signature, removed
 capability) MUST update `docs/plugin-contract.md` in the same commit.
