@@ -1,5 +1,5 @@
 import { createRegistry } from './registry';
-import { createBridge } from './bridge';
+import { createBridge, hideNativeBridgeGlobal } from './bridge';
 import { makeUiApi } from './api/ui';
 import { makeSteamApi } from './api/steam';
 import { makeLifecycleApi } from './api/lifecycle';
@@ -18,14 +18,15 @@ import { startRelay } from './relay/shared-context';
 import { nativeWarn } from './native-warn';
 import { reportUserBinding } from './report-user-binding';
 import { prefetchSetupId } from './prefetch-setup-id';
-import type { SbApi } from './api/api-types';
+import type { PluginRegistrationApi, SbApi } from './api/api-types';
 
 declare const __SB_FRAMEWORK_VERSION__: string;
 declare const __SB_PRODUCTION__: boolean;
 
 declare global {
   interface Window {
-    sb?: SbApi;
+    sb?: PluginRegistrationApi;
+    __sb_framework_teardown?: () => void;
     // __sb_relay_started and __sb_relay_teardown are declared on the Window
     // interface in framework/src/relay/shared-context.ts. We rely on the
     // declaration-merging from the import above so we don't have to
@@ -70,7 +71,7 @@ declare global {
     }
   }
   window.__sb_relay_started = false;
-  if (window.sb) {
+  if (typeof window.__sb_framework_teardown === 'function') {
     // rollbackAll aborts the OLD scope (its own AbortController) and
     // removes DOM mutations from the prior injection (header buttons,
     // popups). Without this, an old button stays in the toolbar but its
@@ -82,10 +83,12 @@ declare global {
     // (called by the freshly-evaluated plugin) to insert a button wired to
     // the live bridge.
     try {
-      window.sb.lifecycle.rollbackAll();
+      window.__sb_framework_teardown();
     } catch (e) {
-      nativeWarn('prior sb.lifecycle.rollbackAll threw', { error: String(e) });
+      nativeWarn('prior __sb_framework_teardown threw', { error: String(e) });
     }
+  }
+  if (window.sb) {
     try {
       // writable:true here so the next defineProperty (line below) can
       // overwrite — even though the prior writable:false locked the slot,
@@ -152,14 +155,28 @@ declare global {
     plugins,
     keys,
   };
+  const registrationApi: PluginRegistrationApi = {
+    version: api.version,
+    get state() { return api.state; },
+    plugins,
+  };
 
-  // writable:false (vs the writable:true on the temporary clear above) is
-  // intentional — the prior clear is a transient unset, the final assign
-  // is the real shape and we don't want a curious plugin reassigning it.
-  // configurable:true preserves hot-reinject-ability (we redefine on next
-  // bootstrap). Not a security boundary — gate is the Ed25519 manifest
-  // signature, this is just casual defense against accidental overwrite.
-  Object.defineProperty(window, 'sb', { value: api, writable: false, configurable: true });
+  const frameworkTeardown = (): void => {
+    lifecycle.rollbackAll();
+    if (window.__sb_framework_teardown === frameworkTeardown) {
+      window.__sb_framework_teardown = undefined;
+    }
+  };
+  Object.defineProperty(window, '__sb_framework_teardown', {
+    value: frameworkTeardown,
+    writable: false,
+    configurable: true,
+  });
+
+  // Only the registration facade is global. The privileged API is passed to
+  // plugin init through a capability-gated PluginContext after manifest
+  // validation, so plugin code cannot bypass capabilities via window.sb.
+  Object.defineProperty(window, 'sb', { value: registrationApi, writable: false, configurable: true });
 
   // Global error / unhandled-rejection forwarders. Routed through scope.listen
   // so they auto-detach on rollbackAll — without that, the OLD injection's
@@ -213,6 +230,7 @@ declare global {
 
   reportUserBinding(steam, bridge);
   prefetchSetupId(api.app, window as { __SB_BOOSTER_UUID__?: string });
+  hideNativeBridgeGlobal();
 })();
 
 // Re-export the public API surface so the npm entry (dist/index.js ESM +

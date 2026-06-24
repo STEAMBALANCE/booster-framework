@@ -1,4 +1,5 @@
 import type { OpenExternalWindowHandle, OpenExternalWindowOptions } from './api-types';
+import { type RelayAuthToken, withRelayAuth } from '../relay/auth';
 
 const ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
 const TITLE_MIN = 1;
@@ -21,6 +22,7 @@ export function _internal_bcRequest(
   bc: { postMessage: (m: any) => void },
   msg: { kind: string; [k: string]: unknown },
   timeoutMsOverride?: number,  // injectable for tests; default REQUEST_TIMEOUT_MS
+  relayAuthToken?: RelayAuthToken,
 ): Promise<any> {
   return new Promise((resolve, reject) => {
     if (nextRequestId >= REQUEST_ID_MAX) {
@@ -39,7 +41,7 @@ export function _internal_bcRequest(
       resolve: (v) => { clearTimeout(timer); resolve(v); },
       reject:  (e) => { clearTimeout(timer); reject(e); },
     });
-    bc.postMessage({ ...msg, requestId });
+    bc.postMessage(withRelayAuth({ ...msg, requestId }, relayAuthToken));
   });
 }
 
@@ -99,6 +101,7 @@ export function validateUrl(url: string, label: string): void {
 
 export interface ExternalWindowApiDeps {
   bcChannel: BroadcastChannel | { postMessage: (m: any) => void; addEventListener: (t: string, cb: any) => void };
+  relayAuthToken?: RelayAuthToken;
 }
 
 export function createExternalWindowApi(deps: ExternalWindowApiDeps) {
@@ -113,14 +116,14 @@ export function createExternalWindowApi(deps: ExternalWindowApiDeps) {
         url: opts.url,
         ...(opts.title !== undefined ? { title: opts.title } : {}),
         ...(opts.taskbarTitle !== undefined ? { taskbarTitle: opts.taskbarTitle } : {}),
-      });
+      }, undefined, deps.relayAuthToken);
       if (!reply.ok) throw new Error(`openExternalWindow: ${reply.error ?? 'unknown error'}`);
-      return makeHandle(opts.id, deps.bcChannel as any);
+      return makeHandle(opts.id, deps.bcChannel as any, deps.relayAuthToken);
     },
   };
 }
 
-function makeHandle(id: string, bc: any): OpenExternalWindowHandle {
+function makeHandle(id: string, bc: any, relayAuthToken?: RelayAuthToken): OpenExternalWindowHandle {
   let closed = false;
   const closeCallbacks: Array<() => void> = [];
 
@@ -148,11 +151,11 @@ function makeHandle(id: string, bc: any): OpenExternalWindowHandle {
     setUrl(url: string) {
       if (closed) return;
       validateUrl(url, 'setUrl(url)');
-      bc.postMessage({ kind: 'external-window-set-url', id, url });
+      bc.postMessage(withRelayAuth({ kind: 'external-window-set-url', id, url }, relayAuthToken));
     },
     close() {
       if (closed) return;
-      bc.postMessage({ kind: 'external-window-close', id });
+      bc.postMessage(withRelayAuth({ kind: 'external-window-close', id }, relayAuthToken));
     },
     on(event: 'close', cb: () => void): () => void {
       if (event !== 'close') throw new Error(`unknown event: ${event}`);

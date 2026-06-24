@@ -171,6 +171,7 @@ afterEach(() => {
     stopRelay();
     stopRelay = null;
   }
+  delete (globalThis as { __SB_RELAY_TOKEN__?: string }).__SB_RELAY_TOKEN__;
 });
 
 test('relay handles navigate request → MWBM.LoadURL + navigate-done reply', async () => {
@@ -199,6 +200,69 @@ test('relay handles navigate request → MWBM.LoadURL + navigate-done reply', as
     replies.find((r) => r.kind === 'navigate-done' && r.requestId === 7),
   ).toBeTruthy();
   sender.close();
+});
+
+test('relay rejects unsafe navigate URL before MWBM.LoadURL', async () => {
+  let loadedUrl = '';
+  const mwbm = { LoadURL: (u: string) => { loadedUrl = u; } };
+  // @ts-expect-error
+  globalThis.MainWindowBrowserManager = mwbm;
+  (win as unknown as { MainWindowBrowserManager: unknown }).MainWindowBrowserManager = mwbm;
+
+  const { startRelay } = await import('../src/relay/shared-context');
+  stopRelay = startRelay(createScope());
+
+  const sender = new BroadcastChannel(RELAY_CHANNEL);
+  const replies: Array<Record<string, unknown>> = [];
+  sender.addEventListener('message', (e: MessageEvent) => {
+    replies.push(e.data as Record<string, unknown>);
+  });
+
+  sender.postMessage({ kind: 'navigate', requestId: 70, url: 'javascript:alert(1)' });
+  await flushBC();
+
+  expect(loadedUrl).toBe('');
+  const err = replies.find((r) => r.kind === 'navigate-error' && r.requestId === 70);
+  expect(err).toBeTruthy();
+  expect((err as { error: string }).error).toContain('url failed safety check');
+  sender.close();
+});
+
+test('relay ignores unauthenticated commands when __SB_RELAY_TOKEN__ is present', async () => {
+  const token = 'x'.repeat(32);
+  (globalThis as { __SB_RELAY_TOKEN__?: string }).__SB_RELAY_TOKEN__ = token;
+  let loadedUrl = '';
+  const mwbm = { LoadURL: (u: string) => { loadedUrl = u; } };
+  // @ts-expect-error
+  globalThis.MainWindowBrowserManager = mwbm;
+  (win as unknown as { MainWindowBrowserManager: unknown }).MainWindowBrowserManager = mwbm;
+
+  const { startRelay } = await import('../src/relay/shared-context');
+  stopRelay = startRelay(createScope());
+
+  const sender = new BroadcastChannel(RELAY_CHANNEL);
+  const replies: Array<Record<string, unknown>> = [];
+  sender.addEventListener('message', (e: MessageEvent) => {
+    replies.push(e.data as Record<string, unknown>);
+  });
+
+  sender.postMessage({ kind: 'navigate', requestId: 71, url: 'https://steambalance.cc/pay/abc' });
+  await flushBC();
+  expect(loadedUrl).toBe('');
+  expect(replies.find((r) => r.requestId === 71)).toBeUndefined();
+
+  sender.postMessage({
+    kind: 'navigate',
+    requestId: 72,
+    url: 'https://steambalance.cc/pay/abc',
+    __sbRelayToken: token,
+  });
+  await flushBC();
+  expect(loadedUrl).toBe('https://steambalance.cc/pay/abc');
+  expect(replies.find((r) => r.kind === 'navigate-done' && r.requestId === 72)).toBeTruthy();
+
+  sender.close();
+  delete (globalThis as { __SB_RELAY_TOKEN__?: string }).__SB_RELAY_TOKEN__;
 });
 
 test('relay handles attach-popup → constructs Popup with chromeless flags + writes html + reply', async () => {

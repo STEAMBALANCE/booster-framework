@@ -4,6 +4,10 @@ import type { Bridge } from '../bridge';
 import { RELAY_CHANNEL } from '../relay/protocol';
 import { deriveCurrency, parseBalanceNumber } from '../steam-internals/currency-map';
 import { readCurrentSteamId64FromStoreGlobal } from '../steam-internals/steam-id';
+import { isUrlSafeForNavigation, safeHostForLog } from '../navigation-safety';
+import { readRelayAuthToken, withRelayAuth } from '../relay/auth';
+
+export { isUrlSafeForNavigation } from '../navigation-safety';
 
 // Window.SteamClient shape is declared in relay/shared-context.ts (merged interface).
 
@@ -32,55 +36,6 @@ function getStoreCountrySteamIdWaitMs(): number {
 }
 
 
-// Basic URL safety gate (NOT a host allow-list). The legitimate redirect
-// flow goes:
-//   booster-checkout → /api/balance/add (steambalance.cc) → JSON {redirectUrl: ...}
-//   → openUrl(redirectUrl) → MainWindowBrowserManager.LoadURL
-// where redirectUrl points at a payment processor (Tinkoff / СБП / etc.) —
-// host known only at runtime. The previous host allow-list (steambalance.cc
-// only) blocked every real payment redirect with `host not allowed: <safeHost>`,
-// which surfaced to the user as "Pay button does nothing" (popup just
-// console.error-ed and reset). The reference implementation
-// (C:/Users/Matrix/Desktop/sb_booster-main/scripts/popup_manager_native.js)
-// calls LoadURL on whatever URL the popup posts, with no validation at all.
-//
-// Trust model: redirectUrl originates from steambalance.cc's own API
-// response (HTTPS-fetched by the popup). The framework does NOT receive
-// arbitrary URLs from untrusted sources. We do reject obvious
-// foot-gun URL shapes (non-https, credential injection via userinfo,
-// non-standard ports) since those have no legitimate use in a payment
-// redirect and would either fail in CEF or carry exfil risk.
-//
-// Exported for unit testing — internal helper, not part of the public SbApi.
-/** @internal */
-export function isUrlSafeForNavigation(url: string): boolean {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return false;
-  }
-  if (parsed.protocol !== 'https:') return false;
-  // No userinfo: `https://attacker:pass@example.com/x` parses with
-  // host=example.com but routes credentials. Reject.
-  if (parsed.username !== '' || parsed.password !== '') return false;
-  // Empty port → default 443 only. Reject explicit ports (8080, 8443, etc).
-  if (parsed.port !== '') return false;
-  return true;
-}
-
-// Hostname-only for error messages — never includes port or query string,
-// so it's safe to log even if the input URL carries a session token in
-// userinfo or query (isHostAllowed already rejects such URLs, but safety
-// is layered).
-function safeHostForLog(url: string): string {
-  try {
-    return new URL(url).hostname;
-  } catch {
-    return '<malformed>';
-  }
-}
-
 interface SnapshotPayload {
   accountName: string;
   personaName?: string;
@@ -92,6 +47,10 @@ interface SnapshotPayload {
 
 export function makeSteamApi(registry: Registry, bridge: Bridge): SteamApi {
   const bc = new BroadcastChannel(RELAY_CHANNEL);
+  const relayAuthToken = readRelayAuthToken();
+  const postRelay = (msg: Record<string, unknown>): void => {
+    bc.postMessage(withRelayAuth(msg, relayAuthToken));
+  };
   let nextRequestId = STEAM_REQUEST_ID_BASE;
   // Heterogeneous resolve type: navigate resolves void. Each call site owns
   // its narrow signature via the closure that wraps `pending.set(...)`.
@@ -135,7 +94,7 @@ export function makeSteamApi(registry: Registry, bridge: Bridge): SteamApi {
         resolve({ email: m.email, emailValidated: m.emailValidated });
       };
       bc.addEventListener('message', handler);
-      bc.postMessage({ kind: 'get-user-account-settings', requestId });
+      postRelay({ kind: 'get-user-account-settings', requestId });
     });
   }
 
@@ -154,7 +113,7 @@ export function makeSteamApi(registry: Registry, bridge: Bridge): SteamApi {
         resolve(m.value);
       };
       bc.addEventListener('message', handler);
-      bc.postMessage({ kind: 'get-user-country', requestId });
+      postRelay({ kind: 'get-user-country', requestId });
     });
   }
 
@@ -173,7 +132,7 @@ export function makeSteamApi(registry: Registry, bridge: Bridge): SteamApi {
         resolve(m.value);
       };
       bc.addEventListener('message', handler);
-      bc.postMessage({ kind: 'get-user-language', requestId });
+      postRelay({ kind: 'get-user-language', requestId });
     });
   }
 
@@ -192,7 +151,7 @@ export function makeSteamApi(registry: Registry, bridge: Bridge): SteamApi {
         resolve(m.value);
       };
       bc.addEventListener('message', handler);
-      bc.postMessage({ kind: 'get-machine-id', requestId });
+      postRelay({ kind: 'get-machine-id', requestId });
     });
   }
 
@@ -290,7 +249,7 @@ export function makeSteamApi(registry: Registry, bridge: Bridge): SteamApi {
   // the current user's core fields. If the relay isn't up yet, the request
   // is silently dropped and the framework stays at null until relay boots and
   // broadcasts proactively.
-  bc.postMessage({ kind: 'request-snapshot' });
+  postRelay({ kind: 'request-snapshot' });
 
   async function resolveCurrentSteamId(): Promise<string | undefined> {
     if (cachedUser?.steamId) return cachedUser.steamId;
@@ -334,7 +293,7 @@ export function makeSteamApi(registry: Registry, bridge: Bridge): SteamApi {
           resolve: () => { clearTimeout(timer); resolve(); },
           reject: (e: Error) => { clearTimeout(timer); reject(e); },
         });
-        bc.postMessage({ kind: 'navigate', requestId, url });
+        postRelay({ kind: 'navigate', requestId, url });
       });
     },
 

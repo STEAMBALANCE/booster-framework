@@ -18,6 +18,7 @@ import type {
 import { createSteamWindow } from './popup-factory';
 import { destroyPopup } from './popup-lifecycle';
 import type { SteamPopupInstance, SteamPopupWindow } from './popup-types';
+import type { RelayAuthToken } from './auth';
 
 // Width/height clamps — caller-supplied values outside [200..2000] x
 // [150..1500] get squished into range. Mirror of framework-side ui.ts
@@ -98,8 +99,9 @@ export function makeWindowHandlers(args: {
   scope: ScopeLike;
   popups: Map<string, unknown>;
   windows: Map<string, WindowTracking>;
+  relayAuthToken?: RelayAuthToken;
 }) {
-  const { bc, scope, popups, windows } = args;
+  const { bc, scope, popups, windows, relayAuthToken } = args;
 
   // Defense-in-depth: an id is "taken" if EITHER an active attachPopup
   // OR another open-window already owns it. Matches the framework-side
@@ -178,6 +180,7 @@ export function makeWindowHandlers(args: {
       centerOnMain: req.centerOnMain,
       iframeBackground: req.iframeBackground,
       embedOrigins,
+      relayAuthToken,
     });
 
     if (!created) return rejectOpen(req, 'createSteamWindow returned null');

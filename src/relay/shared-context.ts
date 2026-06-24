@@ -25,9 +25,11 @@ import { destroyPopup } from './popup-lifecycle';
 import type { SteamPopupParams } from './popup-types';
 import { makeWindowHandlers, type WindowTracking } from './window-handlers';
 import { setupExternalWindowRelay, teardownExternalWindowRelay } from './external-window';
-import { createBridge } from '../bridge';
+import { createBridge, hideNativeBridgeGlobal } from '../bridge';
 import { handleActivateProductKey } from './key-activation';
 import { handleGetMachineId } from './machine-id';
+import { isUrlSafeForNavigation, safeHostForLog } from '../navigation-safety';
+import { hasValidRelayAuth, readRelayAuthToken } from './auth';
 
 declare global {
   interface SteamClientShape {
@@ -201,6 +203,7 @@ export function startRelay(scope: ScopeApi): () => void {
   window.__sb_relay_teardown = initialTeardown;
 
   const bc = new BroadcastChannel(RELAY_CHANNEL);
+  const relayAuthToken = readRelayAuthToken();
   // Singleton map keyed by popupId. Re-attach with the same id reuses the
   // existing native window — refusing to allocate a second native popup is
   // the *whole point* of the attach-once / toggle-many model. Spawning a
@@ -210,7 +213,7 @@ export function startRelay(scope: ScopeApi): () => void {
   // Per-window tracking — shared with makeWindowHandlers so attach-popup's
   // idTaken can also see open windows (single-namespace: one id at a time).
   const windows = new Map<string, WindowTracking>();
-  const winHandlers = makeWindowHandlers({ bc, scope, popups, windows });
+  const winHandlers = makeWindowHandlers({ bc, scope, popups, windows, relayAuthToken });
   // Set when teardown begins so a microtask-deferred attach (see
   // handleAttachPopup) skips its setup if the relay is being torn down.
   // Without this, an attach in flight at teardown time would create an
@@ -220,6 +223,7 @@ export function startRelay(scope: ScopeApi): () => void {
   scope.listen<MessageEvent>(bc, 'message', (ev) => {
     const msg = ev.data as RelayMessage;
     if (!msg || typeof msg !== 'object') return;
+    if (!hasValidRelayAuth(msg, relayAuthToken)) return;
     switch (msg.kind) {
       case 'attach-popup':
         handleAttachPopup(msg);
@@ -288,6 +292,7 @@ export function startRelay(scope: ScopeApi): () => void {
   // multiple createBridge() calls are functionally idempotent.
   //
   const relayBridge = createBridge();
+  hideNativeBridgeGlobal();
 
   // Wire external-window relay: subscribes to MWBM store changes and
   // handles open/setUrl/close/native-title BC messages from main shell.
@@ -611,6 +616,14 @@ export function startRelay(scope: ScopeApi): () => void {
 
   function handleNavigate(msg: NavigateRequest): void {
     try {
+      if (typeof msg.url !== 'string' || msg.url.length > 2048 || !isUrlSafeForNavigation(msg.url)) {
+        bc.postMessage({
+          kind: 'navigate-error',
+          requestId: msg.requestId,
+          error: `url failed safety check: ${safeHostForLog(String(msg.url))}`,
+        });
+        return;
+      }
       if (!window.MainWindowBrowserManager?.LoadURL) {
         bc.postMessage({
           kind: 'navigate-error',
