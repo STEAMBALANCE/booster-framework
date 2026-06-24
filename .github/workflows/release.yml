@@ -1,0 +1,86 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      # Node is used only for `npm publish` to GitHub Packages — bun does the
+      # actual builds. registry-url + scope wire npm auth to GITHUB_TOKEN.
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@steambalance'
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Extract version from tag
+        id: ver
+        run: |
+          VER="${GITHUB_REF#refs/tags/v}"
+          echo "ver=$VER" >> "$GITHUB_OUTPUT"
+
+      - name: Verify tag matches package.json version
+        env:
+          TAG_VER: ${{ steps.ver.outputs.ver }}
+        run: |
+          PKG_VER=$(jq -r .version package.json)
+          if [ "$TAG_VER" != "$PKG_VER" ]; then
+            echo "::error::Tag v$TAG_VER does not match package.json version $PKG_VER"
+            exit 1
+          fi
+          echo "Tag v$TAG_VER matches package.json version $PKG_VER"
+
+      - name: Generate strings
+        run: bun run scripts/gen-strings.ts
+
+      - name: Build IIFE bundle (production) + ESM dist + testing
+        env:
+          SB_PRODUCTION: '1'
+          SB_FRAMEWORK_VERSION: ${{ steps.ver.outputs.ver }}
+        run: bun run build
+
+      - name: Emit type declarations (.d.ts)
+        run: bun run build:types
+
+      - name: Publish package to GitHub Packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm publish
+
+      - name: Rename IIFE artefacts with version suffix
+        env:
+          VER: ${{ steps.ver.outputs.ver }}
+        run: |
+          cd out
+          mv booster-framework.js "booster-framework-${VER}.js"
+          if [ -f booster-framework.js.map ]; then
+            mv booster-framework.js.map "booster-framework-${VER}.js.map"
+          fi
+          sha256sum "booster-framework-${VER}.js" > "booster-framework-${VER}.js.sha256"
+          ls -la
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            out/booster-framework-${{ steps.ver.outputs.ver }}.js
+            out/booster-framework-${{ steps.ver.outputs.ver }}.js.map
+            out/booster-framework-${{ steps.ver.outputs.ver }}.js.sha256
+          generate_release_notes: true
+          fail_on_unmatched_files: false

@@ -1,0 +1,131 @@
+/* Toolbar styles for booster-* buttons. Match Steam's native bell-icon button
+ * look exactly. The native cascade (probe-toolbar-detail + probe-font-size):
+ *   - bell idle: deepest div bg rgba(103,112,123,0.2), 0px 12px padding
+ *   - bell hover (CSS.forcePseudoState): bg rgb(61,68,80), color white
+ *   - active: bg flips back to transparent, text stays white
+ *   - profile balance text: 12px / 400 Motiva Sans, color rgb(120,138,146)
+ *   - "Matrix" account text: 12px / 400 Motiva Sans, color rgb(76,180,255)
+ * The wrapper's computed font-size (16px) is NOT what's rendered: Steam
+ * re-sets text elements to 12px/400 via a CSS-modules class on a deeper
+ * child. The values above match the actual rendered values, not the
+ * wrapper's font-size.
+ *
+ * The bell is the explicit visual reference (user request: "match
+ * Уведомления"). Steam's text buttons (Магазин / Библиотека / Сообщество)
+ * in the main nav use a JS-driven hover and aren't in this toolbar — we
+ * deliberately mirror the bell's CSS-only treatment.
+ *
+ * Outer wrapper uses Steam's `tool-tip-source Focusable` class pair so
+ * we inherit Steam's keyboard-focus ring and tooltip lifecycle.
+ *
+ * Idle text color rgb(139, 146, 154) is Steam's muted toolbar-text
+ * shade (per user reference): full white text in idle reads as a
+ * "primary action" CTA, but native toolbar items are intentionally
+ * dimmer so the bell-area doesn't compete with the central content.
+ * Hover flips to full white as a hover-affordance — same pattern Steam
+ * uses on its own buttons.
+ *
+ * Visual gap between adjacent toolbar items: Steam's native pattern is
+ * asymmetric — each kid's wrapper has zero margin/padding, but the
+ * bg-bearing inner div is left-aligned (margin-left: 0) and 8px shorter
+ * than the wrapper (margin-right: 8 of transparent space). Adjacent
+ * kids' bg-rects then have an 8px breathing-room because every kid's
+ * right edge contributes the gap to its right neighbour. */
+[data-booster-btn] {
+  display: flex; align-items: center; height: 24px;
+  cursor: pointer; user-select: none;
+  -webkit-app-region: no-drag;
+}
+[data-booster-btn] > .booster-toolbar-inner {
+  display: flex; align-items: center; justify-content: center;
+  height: 100%; margin: 0 8px 0 0; padding: 0 12px; border-radius: 2px;
+  font: 400 12px/1 "Motiva Sans", Arial, Helvetica, sans-serif;
+  color: rgb(139, 146, 154);
+  background-color: rgba(103, 112, 123, .2);
+  transition: background-color .12s ease, color .12s ease;
+}
+[data-booster-btn]:hover > .booster-toolbar-inner {
+  background-color: rgb(61, 68, 80);
+  color: rgb(255, 255, 255);
+}
+[data-booster-btn]:active > .booster-toolbar-inner {
+  background-color: rgba(103, 112, 123, .2);
+}
+[data-booster-btn][aria-disabled="true"] > .booster-toolbar-inner {
+  color: rgba(139, 146, 154, .4);
+}
+
+/* Brand variant — SteamBalance green CTA. Used by payment-popup's
+ * header trigger. Trust boundary: callers opt in via variant:'brand'.
+ *
+ * Vertical sizing intentionally matches Steam-native bell/profile/etc.:
+ * .booster-toolbar-inner already has height:100% (= 24px from outer
+ * [data-booster-btn]). Only the horizontal padding shrinks (8 vs default 12)
+ * to match Figma payment-btn 116x24. Adding 'padding: 4px 8px' would
+ * overflow content-box to 32px and the CTA would tower over neighbouring
+ * Steam buttons — vertical centering inside the 24px box already gives
+ * the 4px breathing room Figma drew. */
+[data-booster-btn][data-booster-variant="brand"] > .booster-toolbar-inner {
+  background-color: #34a37b;
+  color: #ffffff;
+  font: 700 11px/16px "Motiva Sans", Arial, Helvetica, sans-serif;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  padding: 0 8px;
+  border-radius: 2px;
+  /* Figma payment-btn 233:8: 8px between label span and icon span.
+   * Scoped to brand variant only — default-variant callers ship no
+   * icon today, so a global gap rule would be cosmetic-only and risk
+   * affecting Steam-native bell-style buttons if a default-variant
+   * caller ever passes icon:'...'. Revisit this rule then. */
+  gap: 8px;
+}
+[data-booster-btn][data-booster-variant="brand"]:hover > .booster-toolbar-inner {
+  background-color: #3eb487;
+  color: #ffffff;
+}
+/* No :active state on the brand button — Steam's native toolbar buttons
+ * (bell, profile, chat) have no pressed/depressed affordance, so dropping
+ * the dark-green flash keeps our "Пополнить" button visually consistent
+ * with the rest of the header. */
+[data-booster-btn] > .booster-toolbar-inner > .booster-toolbar-icon {
+  display: inline-flex; align-items: center;
+  height: 100%;
+  pointer-events: none;
+}
+[data-booster-btn] > .booster-toolbar-inner > .booster-toolbar-icon > img,
+[data-booster-btn] > .booster-toolbar-inner > .booster-toolbar-icon > svg {
+  display: block; height: 12px; width: auto;
+}
+
+/* Steam-style tooltip. Visual values lifted verbatim from Steam's
+ * ._2FxbHJzYoH024ko7zqcJOf rule (probe-tooltip-css):
+ *   - radial-gradient bg from rgb(207,209,211) → rgb(179,184,188)
+ *   - dark rgb(23,24,28) text + white text-shadow for legibility
+ *   - 5px 8px padding, 2px radius, 13px / 400 Motiva
+ *   - layered shadow at 1px / 8px and 2px / 16px for the floating feel
+ * z-index 2000 matches Steam's tooltip portal so we render above the
+ * popup overlay; pointer-events: none so the tooltip never intercepts
+ * clicks meant for the button below it.
+ *
+ * Visibility is keyed off the data-booster-tooltip-show attribute (set by the JS
+ * mouse handlers) so the show/hide transition runs on opacity. The
+ * parent attribute also lets us share one DOM element for any
+ * booster-* button on the page — only one tooltip is visible at a time. */
+.booster-tooltip {
+  position: fixed; z-index: 2000;
+  pointer-events: none; opacity: 0;
+  transition: opacity .15s ease;
+  box-sizing: border-box;
+  padding: 5px 8px; border-radius: 2px;
+  background: radial-gradient(62.67% 62.67% at 62.67% 100%,
+    rgb(207, 209, 211) 0%, rgb(179, 184, 188) 100%);
+  color: rgb(23, 24, 28);
+  text-shadow: rgba(255, 255, 255, .3) 1px 1px 2px;
+  font: 400 13px/1.2 "Motiva Sans", Arial, Helvetica, sans-serif;
+  white-space: nowrap;
+  box-shadow:
+    rgba(0, 0, 0, .333) 1px 1px 8px,
+    rgba(0, 0, 0, .333) 2px 2px 16px 1px;
+}
+.booster-tooltip[data-booster-tooltip-show="1"] { opacity: 1; }

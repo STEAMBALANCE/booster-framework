@@ -1,0 +1,18 @@
+# Node / bun
+node_modules/
+bun.lock
+bun.lockb
+.bun/
+
+# Build outputs
+dist/
+out/
+build/
+
+# Logs
+*.log
+
+# OS
+Thumbs.db
+desktop.ini
+.DS_Store

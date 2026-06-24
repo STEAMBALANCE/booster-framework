@@ -1,0 +1,13 @@
+# framework/bunfig.toml
+#
+# Bun runtime config scoped to the framework workspace. The [test] section
+# lists preload scripts that run before any test file is loaded. We use it
+# to suppress a single known-incidental console.warn that fires whenever
+# `startRelay()` runs without MWBM being installed on `window` (the
+# external-window relay branch is just disabled — fine for tests that
+# aren't exercising it). Without the silencer the warn renders 10+ lines
+# in `bun test` output that look like real failures and obscure actual
+# regressions.
+
+[test]
+preload = ["./tests/setup-silence-noise.ts"]

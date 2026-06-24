@@ -1,0 +1,54 @@
+{
+  "name": "@steambalance/booster-framework",
+  "version": "0.0.22",
+  "description": "Generic Steam client extension framework — public API surface for booster-plugin authors.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/STEAMBALANCE/booster-framework.git"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "exports": {
+    ".": {
+      "bun": "./src/api/api-types.ts",
+      "module": "./src/api/api-types.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./api-types": "./src/api/api-types.ts",
+    "./testing": {
+      "bun": "./src/testing/index.ts",
+      "module": "./src/testing/index.ts",
+      "types": "./dist/testing/index.d.ts",
+      "default": "./dist/testing/index.js"
+    }
+  },
+  "files": [
+    "dist/",
+    "src/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "gen-strings": "bun run scripts/gen-strings.ts",
+    "build": "bun run build.ts",
+    "build:types": "tsc --emitDeclarationOnly",
+    "build:pkg": "bun run scripts/gen-strings.ts && bun run build.ts && tsc --emitDeclarationOnly",
+    "test": "bun test"
+  },
+  "engines": {
+    "bun": ">=1.3.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "bun-types": "^1.3.13",
+    "happy-dom": "^20.9.0",
+    "typesafe-i18n": "^5.26.0",
+    "typescript": "^5.5.0"
+  }
+}
