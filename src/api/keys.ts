@@ -1,6 +1,7 @@
 import type { KeysApi, ActivateOutcome } from './api-types';
 import type { Registry } from '../registry';
 import { RELAY_CHANNEL } from '../relay/protocol';
+import { readRelayAuthToken, withRelayAuth } from '../relay/auth';
 
 const KEYS_REQUEST_ID_BASE = 300_000;
 
@@ -22,6 +23,7 @@ export class KeyActivationTransportError extends Error {
 
 export function makeKeysApi(registry: Registry): KeysApi {
   const bc = new BroadcastChannel(RELAY_CHANNEL);
+  const relayAuthToken = readRelayAuthToken();
   let nextRequestId = KEYS_REQUEST_ID_BASE;
   const pending = new Map<number, { reject: (e: Error) => void; cleanup: () => void }>();
 
@@ -56,7 +58,7 @@ export function makeKeysApi(registry: Registry): KeysApi {
         };
         pending.set(requestId, { reject, cleanup });
         bc.addEventListener('message', handler);
-        bc.postMessage({ kind: 'activate-product-key', requestId, key: productKey });
+        bc.postMessage(withRelayAuth({ kind: 'activate-product-key', requestId, key: productKey }, relayAuthToken));
       });
     },
   };

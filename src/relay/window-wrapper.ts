@@ -4,6 +4,7 @@
 
 import { RELAY_CHANNEL, WINDOW_MESSAGE_MAX_BYTES } from './protocol';
 import { LL } from '../i18n';
+import { RELAY_AUTH_FIELD, type RelayAuthToken } from './auth';
 // Static wrapper chrome. Single source of truth is the .css; dev/tests read it
 // raw via the `type: 'text'` import, production injects a minified copy through
 // the `__SB_WRAPPER_CSS__` bun define (see build.ts → loadCss), which folds the
@@ -38,6 +39,7 @@ export interface WrapperArgs {
   /** Allowlist дополнительных origin'ов (помимо origin стартового url),
    *  которым обёртка отвечает на sb:ready. Default = [FRAME_ORIGIN]. */
   embedOrigins?: string[];
+  relayAuthToken?: RelayAuthToken;
 }
 
 function escapeHtmlAttr(s: string): string {
@@ -126,6 +128,8 @@ export function composeWrapperHtml(args: WrapperArgs): string {
   const frameOriginLiteral  = JSON.stringify(frameOrigin);
   const embedOriginsLiteral = JSON.stringify(embedOrigins);
   const appVersionLiteral   = JSON.stringify(APP_VERSION);
+  const relayAuthFieldLiteral = JSON.stringify(RELAY_AUTH_FIELD);
+  const relayAuthTokenLiteral = JSON.stringify(args.relayAuthToken);
   const MSG_CAP = WINDOW_MESSAGE_MAX_BYTES;
   const acceptLiteral = acceptFrameMessage.toString();
 
@@ -152,11 +156,17 @@ export function composeWrapperHtml(args: WrapperArgs): string {
     const FRAME_ORIGIN = ${frameOriginLiteral};
     const EMBED_ORIGINS = ${embedOriginsLiteral};
     const APP_VERSION = ${appVersionLiteral};
+    const RELAY_AUTH_FIELD = ${relayAuthFieldLiteral};
+    const RELAY_AUTH_TOKEN = ${relayAuthTokenLiteral};
     const MSG_CAP = ${MSG_CAP};
     const sbBC = new BroadcastChannel(${channelLiteral});
     const frame = document.getElementById('booster-win-frame');
+    function relayMsg(m) {
+      if (RELAY_AUTH_TOKEN) m[RELAY_AUTH_FIELD] = RELAY_AUTH_TOKEN;
+      return m;
+    }
     document.getElementById('booster-win-close').addEventListener('click', () => {
-      try { sbBC.postMessage({ kind:'window-user-close', windowId: POPUP_ID }); } catch (e) {}
+      try { sbBC.postMessage(relayMsg({ kind:'window-user-close', windowId: POPUP_ID })); } catch (e) {}
       try { window.SteamClient.Window.Close(); } catch (e) {}
     });
     function buildEmbed() {
@@ -185,7 +195,7 @@ export function composeWrapperHtml(args: WrapperArgs): string {
       // асимметрия с outbound (UTF-8 байты в ui.ts); оба ~16 КБ, точная
       // мера не критична, это backstop против флуда.
       try { if (JSON.stringify(d).length > MSG_CAP) return; } catch (er) { return; }
-      try { sbBC.postMessage({ kind:'window-message', windowId: POPUP_ID, data: d }); } catch (er) {}
+      try { sbBC.postMessage(relayMsg({ kind:'window-message', windowId: POPUP_ID, data: d })); } catch (er) {}
     }
     window.addEventListener('message', onFrameMsg);
     const handleBc = ${handleWrapperBcMessage.toString()};

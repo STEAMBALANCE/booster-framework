@@ -363,6 +363,38 @@ test('drainPluginsOnReady wraps bus with topic-prefix enforcement', async () => 
   expect(busPublishThrew).toBe(true);
 });
 
+test('drainPluginsOnReady uses per-plugin configs for ctx.configs and ctx.sb.configs', async () => {
+  let sameConfigObject = false;
+  const bundle = makeBundle({
+    capabilities: [Capability.Configs],
+    init: async (ctx) => {
+      sameConfigObject = ctx.sb.configs === ctx.configs;
+      await ctx.sb.configs.write('settings', { enabled: true });
+      await ctx.configs.read('settings');
+    },
+  });
+  registry.add(bundle);
+  const manifest: PluginsManifestPrefix = {
+    injectorVersion: 'test', contextKind: ContextKind.Main, userDisabledPlugins: [],
+    plugins: [{
+      id: 'booster-test', version: '1.0.0', apiVersion: 1,
+      contextKinds: [ContextKind.Main],
+      grantedCapabilities: [Capability.Configs],
+    }],
+  };
+
+  await drainPluginsOnReady({
+    registry, manifest, realSb: sb, bridge,
+    currentUrl: 'https://example.com/',
+  });
+
+  expect(sameConfigObject).toBe(true);
+  expect(bridge.calls).toEqual([
+    { op: 'config_write', args: { name: 'settings', data: { enabled: true } }, opts: { pluginId: 'booster-test' } },
+    { op: 'config_read', args: { name: 'settings' }, opts: { pluginId: 'booster-test' } },
+  ]);
+});
+
 test('drainPluginsOnReady stashes outcomes on realSb._pluginOutcomes', async () => {
   const bundle = makeBundle({ init: () => () => { /* cleanup */ } });
   registry.add(bundle);

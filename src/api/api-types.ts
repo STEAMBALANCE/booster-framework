@@ -586,6 +586,16 @@ export interface PluginsApi {
   ready(): Promise<void>;
 }
 
+/**
+ * Minimal global exposed to plugin bundles before their gated PluginContext
+ * exists. Privileged modules are intentionally absent from window.sb.
+ */
+export interface PluginRegistrationApi {
+  readonly version: string;
+  readonly state: 'loading' | 'ready' | 'disabled';
+  readonly plugins: PluginsApi;
+}
+
 
 export interface AppApi {
   /** Persistent per-install token (UUID), or undefined if unavailable. */

@@ -212,9 +212,13 @@ export async function drainPluginsOnReady(args: DrainPluginsArgs): Promise<Plugi
     // for their per-plugin wrappers (topic-prefix-enforced bus, id-auto-
     // prefixed ui) so plugins can't fire bus events outside their namespace
     // or collide DOM ids with other plugins.
+    const pluginConfigs = granted.has(Capability.Configs)
+      ? createPluginConfigs(bridge, bundle.id)
+      : (undefined as never);
     const gated = buildGatedSb(realSb, granted);
     const finalSb: SbApi = {
       ...gated,
+      configs: pluginConfigs,
       bus: granted.has(Capability.Bus)
         ? createPluginBus(realSb.bus, bundle.id, pluginScope.signal)
         : (undefined as never),
@@ -230,9 +234,7 @@ export async function drainPluginsOnReady(args: DrainPluginsArgs): Promise<Plugi
       granted,
       sb: finalSb,
       scope: pluginScope,
-      configs: granted.has(Capability.Configs)
-        ? createPluginConfigs(bridge, bundle.id)
-        : (undefined as never),
+      configs: pluginConfigs,
       log: createPluginLog(bundle.id, (op, pid, args2) => bridge.notify(op, pid, args2 as object)),
       signal: pluginScope.signal,
     };

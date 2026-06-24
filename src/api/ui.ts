@@ -19,7 +19,8 @@ import {
 import { nativeWarn } from '../native-warn';
 import { ensureToolbarStyles } from './ui-toolbar-styles';
 import { wireTooltip } from './ui-tooltip';
-import { isUrlSafeForNavigation } from './steam';
+import { isUrlSafeForNavigation } from '../navigation-safety';
+import { readRelayAuthToken, withRelayAuth } from '../relay/auth';
 
 const ATTACH_TIMEOUT_MS = 5000;
 // Cap our requestId space so it never collides with steam.ts (which starts
@@ -38,6 +39,10 @@ interface PopupListenerSets {
 
 export function makeUiApi(registry: Registry, bridge: Bridge): UiApi {
   const bc = new BroadcastChannel(RELAY_CHANNEL);
+  const relayAuthToken = readRelayAuthToken();
+  const postRelay = (msg: Record<string, unknown>): void => {
+    bc.postMessage(withRelayAuth(msg, relayAuthToken));
+  };
   // Register the BC instance with the registry so on framework re-injection
   // (lifecycle.rollbackAll), this BC is closed and its listeners released.
   // Without this hook, every re-inject leaks a live message subscription.
@@ -146,7 +151,7 @@ export function makeUiApi(registry: Registry, bridge: Bridge): UiApi {
     },
   });
 
-  const externalWindowApi = createExternalWindowApi({ bcChannel: bc });
+  const externalWindowApi = createExternalWindowApi({ bcChannel: bc, relayAuthToken });
 
   function attachRequest<T>(req: Record<string, unknown>): Promise<T> {
     if (nextRequestId > UI_REQUEST_ID_MAX) {
@@ -176,7 +181,7 @@ export function makeUiApi(registry: Registry, bridge: Bridge): UiApi {
           reject(e);
         },
       });
-      bc.postMessage(message);
+      postRelay(message);
     });
   }
 
@@ -386,7 +391,7 @@ export function makeUiApi(registry: Registry, bridge: Bridge): UiApi {
             // Fire-and-forget: relay's teardown also Closes() the popup, but
             // calling out here on framework rollback ensures no orphan even
             // if relay hasn't started yet (race on injection ordering).
-            try { bc.postMessage({ kind: 'popup-destroy', popupId: opts.id }); } catch { /* */ }
+            try { postRelay({ kind: 'popup-destroy', popupId: opts.id }); } catch { /* */ }
             popupListeners.delete(opts.id);
           },
         }),
@@ -432,16 +437,16 @@ export function makeUiApi(registry: Registry, bridge: Bridge): UiApi {
         width:  widthClamped,
         height: heightClamped,
         show(at): void {
-          bc.postMessage({ kind: 'popup-show', popupId: opts.id, x: at.x, y: at.y });
+          postRelay({ kind: 'popup-show', popupId: opts.id, x: at.x, y: at.y });
         },
         hide(): void {
-          bc.postMessage({ kind: 'popup-hide', popupId: opts.id });
+          postRelay({ kind: 'popup-hide', popupId: opts.id });
         },
         toggle(at): void {
-          bc.postMessage({ kind: 'popup-toggle', popupId: opts.id, x: at.x, y: at.y });
+          postRelay({ kind: 'popup-toggle', popupId: opts.id, x: at.x, y: at.y });
         },
         postMessage(data): void {
-          bc.postMessage({ kind: 'popup-postMessage', popupId: opts.id, data });
+          postRelay({ kind: 'popup-postMessage', popupId: opts.id, data });
         },
         on(event, cb): () => void {
           const set = sets[event];
@@ -452,7 +457,7 @@ export function makeUiApi(registry: Registry, bridge: Bridge): UiApi {
           return visible;
         },
         destroy(): void {
-          bc.postMessage({ kind: 'popup-destroy', popupId: opts.id });
+          postRelay({ kind: 'popup-destroy', popupId: opts.id });
           popupListeners.delete(opts.id);
           registry.remove(sets.undoId);
         },
@@ -508,7 +513,7 @@ export function makeUiApi(registry: Registry, bridge: Bridge): UiApi {
           // will close the popup window separately, but issuing window-close
           // here ensures no orphan even if relay hasn't started yet (race on
           // injection ordering).
-          try { bc.postMessage({ kind: 'window-close', windowId: opts.id }); } catch { /* */ }
+          try { postRelay({ kind: 'window-close', windowId: opts.id }); } catch { /* */ }
           windowListeners.delete(opts.id);
         },
       });
@@ -578,15 +583,15 @@ export function makeUiApi(registry: Registry, bridge: Bridge): UiApi {
         height: effH,
         show(): void {
           if (closed) return;
-          bc.postMessage({ kind: 'window-show', windowId: opts.id });
+          postRelay({ kind: 'window-show', windowId: opts.id });
         },
         hide(): void {
           if (closed) return;
-          bc.postMessage({ kind: 'window-hide', windowId: opts.id });
+          postRelay({ kind: 'window-hide', windowId: opts.id });
         },
         close(): void {
           if (closed) return;
-          bc.postMessage({ kind: 'window-close', windowId: opts.id });
+          postRelay({ kind: 'window-close', windowId: opts.id });
           // Eagerly drop the registry entry — the relay will eventually emit
           // window-close-event which would also flip `closed`, but removing
           // here keeps registry size accurate from the caller's perspective
@@ -598,7 +603,7 @@ export function makeUiApi(registry: Registry, bridge: Bridge): UiApi {
         },
         bringToFront(): void {
           if (closed) return;
-          bc.postMessage({ kind: 'window-bring', windowId: opts.id });
+          postRelay({ kind: 'window-bring', windowId: opts.id });
         },
         setTitle(s: string): void {
           if (closed) return;
@@ -606,7 +611,7 @@ export function makeUiApi(registry: Registry, bridge: Bridge): UiApi {
           // RELAY_CHANNEL on its own and updates the title bar on this
           // event (no relay round-trip needed for a pure UI tweak).
           const msg: WindowSetTitleRequest = { kind: 'window-set-title', windowId: opts.id, title: s };
-          bc.postMessage(msg);
+          postRelay(msg as unknown as Record<string, unknown>);
         },
         /** Reflects last-acked window-show-event / window-hide-event from the
          *  relay — NOT real-time native state. If SteamClient.Window calls
@@ -627,7 +632,7 @@ export function makeUiApi(registry: Registry, bridge: Bridge): UiApi {
             nativeWarn('openWindow.postMessage: payload too large', { windowId: opts.id, bytes });
             return;
           }
-          bc.postMessage({ kind: 'window-postMessage', windowId: opts.id, data });
+          postRelay({ kind: 'window-postMessage', windowId: opts.id, data });
         },
         on(event, cb): () => void {
           const set = sets[event];

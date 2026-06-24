@@ -5,7 +5,7 @@ import { test, expect } from 'bun:test';
 // @ts-expect-error
 globalThis.window = globalThis;
 
-import { createBridge } from '../src/bridge';
+import { createBridge, hideNativeBridgeGlobal } from '../src/bridge';
 
 test('bridge sends payload via __sb_native and resolves on __sb_resolve', async () => {
   const bridge = createBridge();
@@ -32,8 +32,8 @@ test('bridge rejects on response.ok=false', async () => {
 });
 
 test('bridge rejects if __sb_native not installed', async () => {
-  const bridge = createBridge();
   delete window.__sb_native;
+  const bridge = createBridge();
   await expect(bridge.call('foo')).rejects.toThrow('native bridge not installed');
 });
 
@@ -106,4 +106,18 @@ test('call without pluginId opt omits pluginId field', () => {
   expect(sent).toHaveLength(1);
   const env = JSON.parse(sent[0]);
   expect(env.pluginId).toBeUndefined();
+});
+
+test('bridge can keep using captured native callback after __sb_native is hidden', async () => {
+  let lastSent: any = null;
+  window.__sb_native = (s: string) => { lastSent = JSON.parse(s); };
+  const bridge = createBridge();
+
+  hideNativeBridgeGlobal();
+  expect(window.__sb_native).toBeUndefined();
+
+  const p = bridge.call('after_hide', {});
+  expect(lastSent.op).toBe('after_hide');
+  window.__sb_resolve!(lastSent.requestId, { ok: true, result: { ok: true } });
+  await expect(p).resolves.toEqual({ ok: true });
 });
