@@ -18,6 +18,7 @@ import { startRelay } from './relay/shared-context';
 import { nativeWarn } from './native-warn';
 import { reportUserBinding } from './report-user-binding';
 import { prefetchSetupId } from './prefetch-setup-id';
+import { buildGlobalSb, type GlobalSbApi } from './plugins/capability-gating';
 import type { SbApi } from './api/api-types';
 
 declare const __SB_FRAMEWORK_VERSION__: string;
@@ -25,7 +26,8 @@ declare const __SB_PRODUCTION__: boolean;
 
 declare global {
   interface Window {
-    sb?: SbApi;
+    sb?: GlobalSbApi;
+    __sb_framework_rollback?: () => void;
     // __sb_relay_started and __sb_relay_teardown are declared on the Window
     // interface in framework/src/relay/shared-context.ts. We rely on the
     // declaration-merging from the import above so we don't have to
@@ -70,7 +72,12 @@ declare global {
     }
   }
   window.__sb_relay_started = false;
-  if (window.sb) {
+  const priorRollback =
+    typeof window.__sb_framework_rollback === 'function'
+      ? window.__sb_framework_rollback
+      : (window.sb as unknown as { lifecycle?: { rollbackAll?: () => void } } | undefined)
+          ?.lifecycle?.rollbackAll;
+  if (priorRollback) {
     // rollbackAll aborts the OLD scope (its own AbortController) and
     // removes DOM mutations from the prior injection (header buttons,
     // popups). Without this, an old button stays in the toolbar but its
@@ -82,7 +89,7 @@ declare global {
     // (called by the freshly-evaluated plugin) to insert a button wired to
     // the live bridge.
     try {
-      window.sb.lifecycle.rollbackAll();
+      priorRollback();
     } catch (e) {
       nativeWarn('prior sb.lifecycle.rollbackAll threw', { error: String(e) });
     }
@@ -94,6 +101,20 @@ declare global {
     } catch {
       // configurable was false on a prior injection (shouldn't happen, but safe-guard)
     }
+  }
+  try {
+    Object.defineProperty(window, 'sb', { value: undefined, writable: true, configurable: true });
+  } catch {
+    // configurable was false on a prior injection (shouldn't happen, but safe-guard)
+  }
+  try {
+    Object.defineProperty(window, '__sb_framework_rollback', {
+      value: undefined,
+      writable: true,
+      configurable: true,
+    });
+  } catch {
+    // best-effort hot-reinject cleanup
   }
 
   if (isSharedContext) {
@@ -159,7 +180,12 @@ declare global {
   // configurable:true preserves hot-reinject-ability (we redefine on next
   // bootstrap). Not a security boundary — gate is the Ed25519 manifest
   // signature, this is just casual defense against accidental overwrite.
-  Object.defineProperty(window, 'sb', { value: api, writable: false, configurable: true });
+  Object.defineProperty(window, 'sb', { value: buildGlobalSb(api), writable: false, configurable: true });
+  Object.defineProperty(window, '__sb_framework_rollback', {
+    value: () => { lifecycle.rollbackAll(); },
+    writable: false,
+    configurable: true,
+  });
 
   // Global error / unhandled-rejection forwarders. Routed through scope.listen
   // so they auto-detach on rollbackAll — without that, the OLD injection's

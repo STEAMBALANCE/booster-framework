@@ -3,6 +3,20 @@ import {
   type SbApi,
 } from '../api/api-types';
 
+export interface GlobalSbApi {
+  readonly version: SbApi['version'];
+  readonly state: SbApi['state'];
+  readonly plugins: SbApi['plugins'];
+}
+
+export function buildGlobalSb(real: SbApi): GlobalSbApi {
+  return {
+    version: real.version,
+    get state() { return real.state; },
+    plugins: real.plugins,
+  };
+}
+
 /**
  * Build a capability-gated view of the framework's SbApi for plugin use.
  *

@@ -11,6 +11,9 @@ build/
 
 # Logs
 *.log
+.env
+.env.*
+!.env.example
 
 # OS
 Thumbs.db
