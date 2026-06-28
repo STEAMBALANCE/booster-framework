@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test';
-import { buildGatedSb } from '../src/plugins/capability-gating';
+import { buildGatedSb, buildGlobalSb } from '../src/plugins/capability-gating';
 import { Capability, type SbApi } from '../src/api/api-types';
 
 // Minimal mock SbApi for testing.
@@ -65,4 +65,21 @@ test('buildGatedSb exposes keys when granted', () => {
 test('buildGatedSb hides keys when not granted', () => {
   const realSb = { keys: {} } as any;
   expect(buildGatedSb(realSb, new Set()).keys).toBeUndefined();
+});
+
+test('buildGlobalSb exposes only plugin registration surface', () => {
+  const real = makeMockSb();
+  const globalSb = buildGlobalSb(real) as unknown as Record<string, unknown>;
+
+  expect(globalSb.version).toBe(real.version);
+  expect(globalSb.state).toBe(real.state);
+  expect(globalSb.plugins).toBe(real.plugins);
+  expect(globalSb.lifecycle).toBeUndefined();
+  expect(globalSb.scope).toBeUndefined();
+  expect(globalSb.ui).toBeUndefined();
+  expect(globalSb.steam).toBeUndefined();
+  expect(globalSb.configs).toBeUndefined();
+  expect(globalSb.bus).toBeUndefined();
+  expect(globalSb.pages).toBeUndefined();
+  expect(globalSb.keys).toBeUndefined();
 });

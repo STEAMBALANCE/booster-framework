@@ -28,6 +28,7 @@ import { setupExternalWindowRelay, teardownExternalWindowRelay } from './externa
 import { createBridge } from '../bridge';
 import { handleActivateProductKey } from './key-activation';
 import { handleGetMachineId } from './machine-id';
+import { isUrlSafeForNavigation } from '../api/steam';
 
 declare global {
   interface SteamClientShape {
@@ -611,6 +612,14 @@ export function startRelay(scope: ScopeApi): () => void {
 
   function handleNavigate(msg: NavigateRequest): void {
     try {
+      if (!isUrlSafeForNavigation(msg.url)) {
+        bc.postMessage({
+          kind: 'navigate-error',
+          requestId: msg.requestId,
+          error: 'unsafe url',
+        });
+        return;
+      }
       if (!window.MainWindowBrowserManager?.LoadURL) {
         bc.postMessage({
           kind: 'navigate-error',
