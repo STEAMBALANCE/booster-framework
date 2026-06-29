@@ -37,3 +37,20 @@ test('rejects bad id regex', () => {
   const r = validatePluginMeta({ ...BASE, id: '0-bad-start' });
   expect(r.ok).toBe(false);
 });
+
+test('accepts valid subscribeTopics', () => {
+  const r = validatePluginMeta({ ...BASE, subscribeTopics: ['checkout.state', 'addfunds.*'] });
+  expect(r.ok).toBe(true);
+});
+
+test('rejects malformed subscribeTopics entry', () => {
+  const r = validatePluginMeta({ ...BASE, subscribeTopics: ['INVALID_TOPIC'] });
+  expect(r.ok).toBe(false);
+  if (!r.ok) expect(r.error).toMatch(/subscribeTopics\[0\]/);
+});
+
+test('rejects subscribeTopics entry with space', () => {
+  const r = validatePluginMeta({ ...BASE, subscribeTopics: ['has space'] });
+  expect(r.ok).toBe(false);
+  if (!r.ok) expect(r.error).toMatch(/invalid topic format/);
+});

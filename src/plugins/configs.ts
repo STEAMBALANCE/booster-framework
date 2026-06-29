@@ -6,7 +6,7 @@ import type { Bridge } from '../bridge';
  * envelope. Plugin can't override pluginId — bridge closure binds it.
  */
 export function createPluginConfigs(bridge: Bridge, pluginId: string): ConfigsApi {
-  return {
+  return Object.freeze({
     async read<T = unknown>(name: string): Promise<T | null> {
       const r = await bridge.call<{ data: T | null }>('config_read',
         { name }, { pluginId });
@@ -16,5 +16,5 @@ export function createPluginConfigs(bridge: Bridge, pluginId: string): ConfigsAp
       await bridge.call<{ ok: true }>('config_write',
         { name, data }, { pluginId });
     },
-  };
+  });
 }

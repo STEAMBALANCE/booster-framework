@@ -1,5 +1,5 @@
 import { createRegistry } from './registry';
-import { createBridge } from './bridge';
+import { createBridge, createTokenBridge } from './bridge';
 import { makeUiApi } from './api/ui';
 import { makeSteamApi } from './api/steam';
 import { makeLifecycleApi } from './api/lifecycle';
@@ -18,14 +18,26 @@ import { startRelay } from './relay/shared-context';
 import { nativeWarn } from './native-warn';
 import { reportUserBinding } from './report-user-binding';
 import { prefetchSetupId } from './prefetch-setup-id';
+import { readAndConsumeSec } from './sec';
 import type { SbApi } from './api/api-types';
 
 declare const __SB_FRAMEWORK_VERSION__: string;
 declare const __SB_PRODUCTION__: boolean;
 
+/** Minimal registration facade exposed on window.sb.
+ *  The full SbApi is per-plugin via ctx.sb (capability-gated). */
+interface SbRegistrationFacade {
+  readonly plugins: { readonly register: SbApi['plugins']['register'] };
+}
+
 declare global {
   interface Window {
-    sb?: SbApi;
+    sb?: SbRegistrationFacade;
+    // Internal re-injection handle. Set by THIS bootstrap; read by the NEXT
+    // bootstrap's rollback block. Not part of the plugin-visible API.
+    // _pluginOutcomes: dev diagnostic set by drainPluginsOnReady; accessible
+    // as globalThis.__sb_internal._pluginOutcomes after the drain completes.
+    __sb_internal?: { rollbackAll: () => void; teardown: () => void; _pluginOutcomes?: unknown[] };
     // __sb_relay_started and __sb_relay_teardown are declared on the Window
     // interface in framework/src/relay/shared-context.ts. We rely on the
     // declaration-merging from the import above so we don't have to
@@ -70,7 +82,15 @@ declare global {
     }
   }
   window.__sb_relay_started = false;
-  if (window.sb) {
+  // Resolve the prior injection's rollback handle. THIS branch records it on
+  // window.__sb_internal; the currently-deployed (pre-this-branch) framework
+  // recorded it on window.sb.lifecycle instead (no __sb_internal). On the
+  // FIRST in-place hot-update / self-update that deploys this branch over a
+  // page still running the old framework, fall back to the legacy handle so
+  // the old injection is still rolled back for that one-time transition.
+  const legacyLifecycle = (window.sb as unknown as
+    { lifecycle?: { rollbackAll?: () => void } } | undefined)?.lifecycle;
+  if (window.__sb_internal || typeof legacyLifecycle?.rollbackAll === 'function') {
     // rollbackAll aborts the OLD scope (its own AbortController) and
     // removes DOM mutations from the prior injection (header buttons,
     // popups). Without this, an old button stays in the toolbar but its
@@ -82,9 +102,13 @@ declare global {
     // (called by the freshly-evaluated plugin) to insert a button wired to
     // the live bridge.
     try {
-      window.sb.lifecycle.rollbackAll();
+      if (window.__sb_internal) {
+        window.__sb_internal.rollbackAll();
+      } else {
+        legacyLifecycle!.rollbackAll!();
+      }
     } catch (e) {
-      nativeWarn('prior sb.lifecycle.rollbackAll threw', { error: String(e) });
+      nativeWarn('prior rollbackAll threw', { error: String(e) });
     }
     try {
       // writable:true here so the next defineProperty (line below) can
@@ -97,10 +121,19 @@ declare global {
   }
 
   if (isSharedContext) {
-    // SharedJSContext: relay only, no window.sb
-    startRelay(scope);
+    // SharedJSContext: relay only, no window.sb.
+    // Read+delete _sec BEFORE startRelay so the relay can bind its bridge
+    // to the framework token (external-window / native ops attribution).
+    const sec = readAndConsumeSec();
+    startRelay(scope, sec);
     return;
   }
+
+  // Read+delete _sec from __SB_PLUGINS_MANIFEST__ BEFORE createBridge and
+  // before the plugin drain. The injector (A3) emits frameworkToken here.
+  // Must run synchronously so plugin bundles (evaluated in later
+  // Runtime.evaluate calls) never see the _sec field.
+  const sec = readAndConsumeSec();
 
   // contextKind is sourced from the C++-injected prefix
   // (__SB_PLUGINS_MANIFEST__.contextKind). Falls back to ContextKind.Main with
@@ -109,19 +142,26 @@ declare global {
   const contextKind = readContextKind();
 
   const registry = createRegistry();
-  const bridge = createBridge();
+  const bridge = createBridge(undefined, { resolverName: sec.resolverName });
+  // Framework identity bridge: stamps frameworkToken on every native IPC
+  // envelope so the native router (A5/A6) attributes framework-internal ops
+  // to the framework identity (is_framework=true → all caps). Falls back to
+  // the base bridge (no token) when running against a pre-A3 injector.
+  const fwBridge = sec.frameworkToken
+    ? createTokenBridge(bridge, sec.frameworkToken, 'booster-framework')
+    : bridge;
   const lifecycle = makeLifecycleApi(registry, scope);
   const context = makeContextApi(scope, contextKind);
   const pages = makePagesApi(scope, context);
-  const bus = makeBusApi(scope, bridge);
-  const ui = makeUiApi(registry, bridge);
-  const steam = makeSteamApi(registry, bridge);
-  const configs = makeConfigsApi(bridge);
-  const keys = makeKeysApi(registry);
-  const app = makeAppApi(bridge);
+  const bus = makeBusApi(scope, fwBridge, sec.busDispatchName);
+  const ui = makeUiApi(registry, fwBridge, sec.relaySecret);
+  const steam = makeSteamApi(registry, fwBridge, sec.relaySecret);
+  const configs = makeConfigsApi(fwBridge);
+  const keys = makeKeysApi(registry, sec.relaySecret);
+  const app = makeAppApi(fwBridge);
   // Invisible store-country capture. No-op unless this context is on
   // store.steampowered.com (only there is /account/ fetchable same-origin).
-  maybeCaptureStoreCountry(bridge, scope);
+  maybeCaptureStoreCountry(fwBridge, scope);
 
   // Plugin registry: populated by plugin calls to sb.plugins.register().
   // Drained after lifecycle._markReady() below — see drainPluginsOnReady.
@@ -152,21 +192,52 @@ declare global {
     plugins,
     keys,
   };
+  // Defense-in-depth: freeze the api object so no code in this bootstrap
+  // or a plugin can add/remove/replace properties. The `lifecycleState`
+  // local variable is NOT a property of api — it's captured in the getter
+  // closure — so this freeze does not prevent state transitions.
+  Object.freeze(api);
 
-  // writable:false (vs the writable:true on the temporary clear above) is
-  // intentional — the prior clear is a transient unset, the final assign
-  // is the real shape and we don't want a curious plugin reassigning it.
-  // configurable:true preserves hot-reinject-ability (we redefine on next
-  // bootstrap). Not a security boundary — gate is the Ed25519 manifest
-  // signature, this is just casual defense against accidental overwrite.
-  Object.defineProperty(window, 'sb', { value: api, writable: false, configurable: true });
+  // Expose a frozen minimal facade — plugins call sb.plugins.register() from
+  // their top-level code. The full SbApi lives in the bootstrap closure and
+  // is passed per-plugin via ctx.sb (capability-gated). configurable:true
+  // preserves hot-reinject-ability (next bootstrap clears + redefines).
+  Object.defineProperty(window, 'sb', {
+    value: Object.freeze({ plugins: Object.freeze({ register: api.plugins.register }) }),
+    writable: false,
+    configurable: true,
+  });
+  // __sb_internal carries the re-injection handles. The next bootstrap reads
+  // this instead of window.sb.lifecycle so that rollbackAll remains reachable
+  // even though window.sb no longer exposes lifecycle.
+  // _pluginOutcomes getter: exposes the drain result for dev diagnostics
+  // (globalThis.__sb_internal._pluginOutcomes) once drainPluginsOnReady sets
+  // it on api. Returns undefined until the drain completes.
+  window.__sb_internal = {
+    rollbackAll: () => api.lifecycle.rollbackAll(),
+    teardown: () => {},
+    get _pluginOutcomes() { return (api as unknown as { _pluginOutcomes?: unknown[] })._pluginOutcomes; },
+  };
+
+  // Register the per-launch secret keys-activate fn. The injector emits
+  // _sec.keysActivate so the native host.activateKey handler can invoke
+  // api.keys.activate without relying on the minimal window.sb facade.
+  // Non-enumerable so it doesn't appear in Object.keys(window) scans.
+  if (sec.keysActivate) {
+    Object.defineProperty(window, sec.keysActivate, {
+      value: (k: string) => api.keys.activate(k),
+      enumerable: false,
+      configurable: true,
+      writable: false,
+    });
+  }
 
   // Global error / unhandled-rejection forwarders. Routed through scope.listen
   // so they auto-detach on rollbackAll — without that, the OLD injection's
   // listener stays alive, sees a NEW injection's error, and tries to log it
   // through the OLD (now-dead) bridge.
   scope.listen<ErrorEvent>(window, 'error', (ev) => {
-    bridge.notify('log', 'booster-framework', {
+    fwBridge.notify('log', 'booster-framework', {
       level: 'error',
       msg: ev.message,
       meta: {
@@ -177,7 +248,7 @@ declare global {
     });
   });
   scope.listen<PromiseRejectionEvent>(window, 'unhandledrejection', (ev) => {
-    bridge.notify('log', 'booster-framework', {
+    fwBridge.notify('log', 'booster-framework', {
       level: 'error',
       msg: 'unhandled rejection',
       meta: { reason: String(ev.reason) },
@@ -211,7 +282,7 @@ declare global {
     }
   });
 
-  reportUserBinding(steam, bridge);
+  reportUserBinding(steam, fwBridge);
   prefetchSetupId(api.app, window as { __SB_BOOSTER_UUID__?: string });
 })();
 

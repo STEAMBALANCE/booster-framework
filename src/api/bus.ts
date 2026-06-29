@@ -18,15 +18,17 @@ declare global {
   }
 }
 
-export function makeBusApi(scope: ScopeApi, bridge: Bridge): BusApi {
+export function makeBusApi(scope: ScopeApi, bridge: Bridge, dispatchName?: string): BusApi {
   const subscribers = new Map<string, Set<(d: unknown) => void>>();
 
-  // Install dispatch entry-point. C++ broadcasts call this on each target.
-  // Use globalThis (not window) — works in main shell + store pages + service
-  // contexts. The C++-emitted JS does `window.__sb_bus_dispatch && ...`,
-  // which `globalThis === window` makes equivalent in any browser-like context.
-  (globalThis as { __sb_bus_dispatch?: (t: string, d: unknown) => void })
-    .__sb_bus_dispatch = (topic: string, data: unknown) => {
+  // Install dispatch entry-point. C++ broadcasts call this on each target
+  // via window["<dispatchName>"](...) (bracket notation, B6).
+  // When dispatchName is provided (per-launch secret name from _sec), register
+  // non-enumerable under that name so it's immune to enumeration and plugin
+  // overwrites of window.__sb_bus_dispatch. Fall back to the legacy global
+  // name when not provided (back-compat for pre-B4 injectors / tests).
+  const _dispatchName = dispatchName ?? '__sb_bus_dispatch';
+  const _dispatchFn = (topic: string, data: unknown) => {
     const set = subscribers.get(topic);
     if (!set) {
       // Dev-only diagnostic: a remote broadcast arrived for a topic this
@@ -58,6 +60,21 @@ export function makeBusApi(scope: ScopeApi, bridge: Bridge): BusApi {
       }
     }
   };
+  // Register the dispatch function. When a per-launch secret name is given,
+  // install non-enumerable+configurable via defineProperty so a plugin can't
+  // observe or overwrite it via enumeration or assignment. With the default
+  // legacy name, use a plain assignment (back-compat: pre-B4 injectors and
+  // older tests call `window.__sb_bus_dispatch` directly).
+  if (dispatchName) {
+    Object.defineProperty(globalThis, _dispatchName, {
+      value: _dispatchFn,
+      enumerable: false,
+      configurable: true,
+    });
+  } else {
+    (globalThis as { __sb_bus_dispatch?: (t: string, d: unknown) => void })
+      .__sb_bus_dispatch = _dispatchFn;
+  }
   scope.signal.addEventListener('abort', () => {
     subscribers.clear();
     // Don't delete the global handler — next bootstrap overwrites with

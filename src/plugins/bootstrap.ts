@@ -15,6 +15,7 @@ import {
   type SbApi,
 } from '../api/api-types';
 import type { Bridge } from '../bridge';
+import { createTokenBridge } from '../bridge';
 import { runPluginInits, type PluginInitOutcome } from './lifecycle';
 import { crossValidate, type ManifestPluginEntry } from './validation';
 import { buildGatedSb } from './capability-gating';
@@ -79,34 +80,42 @@ export function filterEligiblePlugins(args: {
 }): {
   bundle: PluginManifest;
   manifestEntry: ManifestPluginEntry;
+  authoritativeId: string;
+  token?: string;
 }[] {
   const { registry, manifest, currentUrl } = args;
   const log = args.log ?? defaultDrainLog;
   const currentKind = manifest.contextKind as ContextKind;
   const userDisabled = new Set(manifest.userDisabledPlugins);
-  const eligible: { bundle: PluginManifest; manifestEntry: ManifestPluginEntry }[] = [];
+  const eligible: {
+    bundle: PluginManifest;
+    manifestEntry: ManifestPluginEntry;
+    authoritativeId: string;
+    token?: string;
+  }[] = [];
 
-  for (const bundle of registry.list()) {
-    const manifestEntry = manifest.plugins.find((p) => p.id === bundle.id);
+  for (const entry of registry.listEntries()) {
+    const { manifest: bundle, authoritativeId, token } = entry;
+    const manifestEntry = manifest.plugins.find((p) => p.id === authoritativeId);
     if (!manifestEntry) {
-      log.warn(`plugin '${bundle.id}' registered but not in manifest — skipping`);
+      log.warn(`plugin '${authoritativeId}' registered but not in manifest — skipping`);
       continue;
     }
     // userDisabledPlugins is a hard skip — manifest's `required` flag in
     // the spec means "cannot be user-disabled"; we honour that by only
     // skipping when NOT required.
-    if (userDisabled.has(bundle.id) && !manifestEntry.required) {
-      log.info(`plugin '${bundle.id}' user-disabled — skipping`);
+    if (userDisabled.has(authoritativeId) && !manifestEntry.required) {
+      log.info(`plugin '${authoritativeId}' user-disabled — skipping`);
       continue;
     }
     if (!bundle.contextKinds.includes(currentKind)) continue;
     if (!SUPPORTED_API_VERSIONS.has(bundle.apiVersion)) {
-      log.warn(`plugin '${bundle.id}' apiVersion ${bundle.apiVersion} not supported`);
+      log.warn(`plugin '${authoritativeId}' apiVersion ${bundle.apiVersion} not supported`);
       continue;
     }
     const v = crossValidate(bundle, manifestEntry);
     if (!v.ok) {
-      log.warn(`plugin '${bundle.id}' cross-validation failed: ${v.reason}`);
+      log.warn(`plugin '${authoritativeId}' cross-validation failed: ${v.reason}`);
       continue;
     }
     if (bundle.urlPatterns && bundle.urlPatterns.length > 0) {
@@ -119,12 +128,12 @@ export function filterEligiblePlugins(args: {
         } catch {
           // Invalid regex source — treat as non-match; manifest verifier
           // should have rejected this upstream, but defend in depth.
-          log.warn(`plugin '${bundle.id}' urlPattern '${p}' is not a valid regex`);
+          log.warn(`plugin '${authoritativeId}' urlPattern '${p}' is not a valid regex`);
         }
       }
       if (!matched) continue;
     }
-    eligible.push({ bundle, manifestEntry });
+    eligible.push({ bundle, manifestEntry, authoritativeId, token });
   }
   return eligible;
 }
@@ -159,7 +168,8 @@ async function waitForExpectedRegistrations(
   if (expectedIds.size === 0) return;
   const deadline = Date.now() + PLUGIN_REGISTER_WAIT_MAX_MS;
   for (;;) {
-    const have = new Set(registry.list().map((b) => b.id));
+    // Use authoritativeId so injector-assigned ids are matched correctly.
+    const have = new Set(registry.listEntries().map((e) => e.authoritativeId));
     let missing = 0;
     for (const id of expectedIds) if (!have.has(id)) missing++;
     if (missing === 0) return;
@@ -199,41 +209,61 @@ export async function drainPluginsOnReady(args: DrainPluginsArgs): Promise<Plugi
   const currentKind = manifest.contextKind as ContextKind;
 
   const outcomes = await runPluginInits(eligibleBundles, (bundle): PluginContext => {
-    const manifestEntry = eligible.find((e) => e.bundle.id === bundle.id)!.manifestEntry;
+    const eligibleEntry = eligible.find((e) => e.bundle === bundle)!;
+    const { manifestEntry, authoritativeId, token } = eligibleEntry;
+
     // Effective capabilities = (plugin requested) ∩ (manifest granted).
     const granted = new Set<Capability>(
       bundle.capabilities.filter((c) =>
         manifestEntry.grantedCapabilities.includes(c as string),
       ),
     );
-    const pluginScope = createPluginScope(realSb.scope.signal, bundle.id);
+    const pluginScope = createPluginScope(realSb.scope.signal, authoritativeId);
+
+    // Per-plugin token bridge: carries the injector-assigned token on every
+    // native IPC envelope, enabling the native router (A5/A6) to resolve
+    // the calling plugin's identity without trusting self-declared pluginId.
+    const tb: Bridge = token
+      ? createTokenBridge(bridge, token, authoritativeId)
+      : bridge;
+
+    if (!token) {
+      log.warn(`plugin '${authoritativeId}' has no boot token — native enforcement will deny after A6`);
+    }
+
+    // Token-bound per-plugin ConfigsApi. Both PluginContext.configs AND
+    // finalSb.configs use this same object so every config call carries
+    // the token regardless of access path (ctx.configs vs ctx.sb.configs).
+    const pluginConfigs = granted.has(Capability.Configs)
+      ? createPluginConfigs(tb, authoritativeId)
+      : (undefined as never);
 
     // buildGatedSb gives us the standard gated view; we then swap bus + ui
     // for their per-plugin wrappers (topic-prefix-enforced bus, id-auto-
     // prefixed ui) so plugins can't fire bus events outside their namespace
-    // or collide DOM ids with other plugins.
+    // or collide DOM ids with other plugins. Also override configs to the
+    // token-bound version so ctx.sb.configs carries the token (A4 fix).
     const gated = buildGatedSb(realSb, granted);
     const finalSb: SbApi = {
       ...gated,
       bus: granted.has(Capability.Bus)
-        ? createPluginBus(realSb.bus, bundle.id, pluginScope.signal)
+        ? createPluginBus(realSb.bus, authoritativeId, pluginScope.signal, manifestEntry.subscribeTopics ?? [])
         : (undefined as never),
       ui: granted.has(Capability.Ui)
-        ? createPluginUi(realSb.ui, bundle.id)
+        ? createPluginUi(realSb.ui, authoritativeId)
         : (undefined as never),
+      configs: pluginConfigs,
     };
 
     return {
-      pluginId: bundle.id,
+      pluginId: authoritativeId,
       contextKind: currentKind,
       apiVersion: bundle.apiVersion,
       granted,
       sb: finalSb,
       scope: pluginScope,
-      configs: granted.has(Capability.Configs)
-        ? createPluginConfigs(bridge, bundle.id)
-        : (undefined as never),
-      log: createPluginLog(bundle.id, (op, pid, args2) => bridge.notify(op, pid, args2 as object)),
+      configs: pluginConfigs,
+      log: createPluginLog(authoritativeId, (op, pid, args2) => tb.notify(op, pid, args2 as object)),
       signal: pluginScope.signal,
     };
   });

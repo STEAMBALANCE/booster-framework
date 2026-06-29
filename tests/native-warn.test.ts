@@ -1,14 +1,10 @@
 // [framework] nativeWarn — calls __sb_native with correct shape, swallows
 // when __sb_native is absent.
 //
-// nativeWarn reads window.__sb_native at call time (not at import time), so
+// nativeWarn reads globalThis.__sb_native at call time (not at import time), so
 // tests manage presence per-test via beforeEach/afterEach.
 
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
-
-// Provide a minimal window global so nativeWarn can reach window.__sb_native.
-// @ts-expect-error
-globalThis.window = globalThis;
 
 import { nativeWarn } from '../src/native-warn';
 

@@ -1,5 +1,6 @@
 import type { PluginsApi, PluginManifest } from './api-types';
 import type { PluginRegistry } from '../plugins/registry';
+import { nativeWarn } from '../native-warn';
 
 export interface PluginsApiDeps {
   ready: Promise<void>;
@@ -12,7 +13,29 @@ export function createPluginsApi(
   return {
     register(opts: PluginManifest): void {
       validateShape(opts);
-      registry.add(opts);
+
+      // Consume __SB_PLUGIN_BOOT__ injected by the native injector (A3).
+      // The blob is one-shot: read, capture, delete — exactly once per bundle.
+      const boot = (window as unknown as Record<string, unknown>)['__SB_PLUGIN_BOOT__'];
+      let token: string | undefined;
+      let authoritativeId: string = opts.id;
+
+      if (boot && typeof boot === 'object') {
+        const b = boot as Record<string, unknown>;
+        if (typeof b['token'] === 'string' && typeof b['id'] === 'string') {
+          token = b['token'];
+          authoritativeId = b['id'];
+        }
+      }
+      delete (window as unknown as Record<string, unknown>)['__SB_PLUGIN_BOOT__'];
+
+      // C1: if the plugin self-declared a different id than the injector
+      // assigned, use the injector's id as authoritative and warn.
+      if (opts.id !== authoritativeId) {
+        nativeWarn('plugin id mismatch', { declared: opts.id, actual: authoritativeId });
+      }
+
+      registry.add(opts, { token, authoritativeId });
     },
     ready(): Promise<void> {
       return deps.ready;

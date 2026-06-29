@@ -1,7 +1,7 @@
 import type { SteamApi, SteamUser, MachineId } from './api-types';
 import type { Registry } from '../registry';
 import type { Bridge } from '../bridge';
-import { RELAY_CHANNEL } from '../relay/protocol';
+import { createRelayChannel } from '../relay/channel';
 import { deriveCurrency, parseBalanceNumber } from '../steam-internals/currency-map';
 import { readCurrentSteamId64FromStoreGlobal } from '../steam-internals/steam-id';
 
@@ -90,8 +90,12 @@ interface SnapshotPayload {
   isOfflineMode?: boolean;
 }
 
-export function makeSteamApi(registry: Registry, bridge: Bridge): SteamApi {
-  const bc = new BroadcastChannel(RELAY_CHANNEL);
+export function makeSteamApi(registry: Registry, bridge: Bridge, relaySecret?: string): SteamApi {
+  // Authenticated relay channel: outbound posts carry the per-launch secret;
+  // inbound (user-snapshot, *-ok responses) lacking the tag are dropped —
+  // closing the V3 forged-`user-snapshot` vector. `relaySecret === undefined`
+  // (tests / pre-secret injector) ⇒ untagged passthrough.
+  const ch = createRelayChannel(relaySecret);
   let nextRequestId = STEAM_REQUEST_ID_BASE;
   // Heterogeneous resolve type: navigate resolves void. Each call site owns
   // its narrow signature via the closure that wraps `pending.set(...)`.
@@ -123,76 +127,60 @@ export function makeSteamApi(registry: Registry, bridge: Bridge): SteamApi {
   function callRelayGetAccountSettings(): Promise<{ email?: string; emailValidated?: boolean }> {
     return new Promise((resolve) => {
       const requestId = userExtraNextRequestId++;
-      const timer = setTimeout(() => {
-        bc.removeEventListener('message', handler);
-        resolve({});
-      }, getUserExtraTimeoutMs());
-      const handler = (ev: MessageEvent) => {
-        const m = ev.data as { kind?: string; requestId?: number; email?: string; emailValidated?: boolean } | undefined;
+      const timer = setTimeout(() => { off(); resolve({}); }, getUserExtraTimeoutMs());
+      const off = ch.onMessage((data) => {
+        const m = data as { kind?: string; requestId?: number; email?: string; emailValidated?: boolean } | undefined;
         if (m?.kind !== 'user-account-settings-ok' || m?.requestId !== requestId) return;
         clearTimeout(timer);
-        bc.removeEventListener('message', handler);
+        off();
         resolve({ email: m.email, emailValidated: m.emailValidated });
-      };
-      bc.addEventListener('message', handler);
-      bc.postMessage({ kind: 'get-user-account-settings', requestId });
+      });
+      ch.post({ kind: 'get-user-account-settings', requestId });
     });
   }
 
   function callRelayGetCountry(): Promise<string | undefined> {
     return new Promise((resolve) => {
       const requestId = userExtraNextRequestId++;
-      const timer = setTimeout(() => {
-        bc.removeEventListener('message', handler);
-        resolve(undefined);
-      }, getUserExtraTimeoutMs());
-      const handler = (ev: MessageEvent) => {
-        const m = ev.data as { kind?: string; requestId?: number; value?: string } | undefined;
+      const timer = setTimeout(() => { off(); resolve(undefined); }, getUserExtraTimeoutMs());
+      const off = ch.onMessage((data) => {
+        const m = data as { kind?: string; requestId?: number; value?: string } | undefined;
         if (m?.kind !== 'user-country-ok' || m?.requestId !== requestId) return;
         clearTimeout(timer);
-        bc.removeEventListener('message', handler);
+        off();
         resolve(m.value);
-      };
-      bc.addEventListener('message', handler);
-      bc.postMessage({ kind: 'get-user-country', requestId });
+      });
+      ch.post({ kind: 'get-user-country', requestId });
     });
   }
 
   function callRelayGetLanguage(): Promise<string | undefined> {
     return new Promise((resolve) => {
       const requestId = userExtraNextRequestId++;
-      const timer = setTimeout(() => {
-        bc.removeEventListener('message', handler);
-        resolve(undefined);
-      }, getUserExtraTimeoutMs());
-      const handler = (ev: MessageEvent) => {
-        const m = ev.data as { kind?: string; requestId?: number; value?: string } | undefined;
+      const timer = setTimeout(() => { off(); resolve(undefined); }, getUserExtraTimeoutMs());
+      const off = ch.onMessage((data) => {
+        const m = data as { kind?: string; requestId?: number; value?: string } | undefined;
         if (m?.kind !== 'user-language-ok' || m?.requestId !== requestId) return;
         clearTimeout(timer);
-        bc.removeEventListener('message', handler);
+        off();
         resolve(m.value);
-      };
-      bc.addEventListener('message', handler);
-      bc.postMessage({ kind: 'get-user-language', requestId });
+      });
+      ch.post({ kind: 'get-user-language', requestId });
     });
   }
 
   function callRelayGetMachineId(): Promise<MachineId | undefined> {
     return new Promise((resolve) => {
       const requestId = userExtraNextRequestId++;
-      const timer = setTimeout(() => {
-        bc.removeEventListener('message', handler);
-        resolve(undefined);
-      }, getUserExtraTimeoutMs());
-      const handler = (ev: MessageEvent) => {
-        const m = ev.data as { kind?: string; requestId?: number; value?: MachineId } | undefined;
+      const timer = setTimeout(() => { off(); resolve(undefined); }, getUserExtraTimeoutMs());
+      const off = ch.onMessage((data) => {
+        const m = data as { kind?: string; requestId?: number; value?: MachineId } | undefined;
         if (m?.kind !== 'machine-id-ok' || m?.requestId !== requestId) return;
         clearTimeout(timer);
-        bc.removeEventListener('message', handler);
+        off();
         resolve(m.value);
-      };
-      bc.addEventListener('message', handler);
-      bc.postMessage({ kind: 'get-machine-id', requestId });
+      });
+      ch.post({ kind: 'get-machine-id', requestId });
     });
   }
 
@@ -242,7 +230,7 @@ export function makeSteamApi(registry: Registry, bridge: Bridge): SteamApi {
   registry.push({
     description: 'steam-bc',
     undo: () => {
-      try { bc.close(); } catch { /* */ }
+      try { ch.close(); } catch { /* */ }
       // Reject any in-flight promises so callers don't hang past rollback.
       for (const [, p] of pending) {
         try { p.reject(new Error('framework rolled back')); } catch { /* */ }
@@ -258,8 +246,8 @@ export function makeSteamApi(registry: Registry, bridge: Bridge): SteamApi {
     },
   });
 
-  bc.addEventListener('message', (ev: MessageEvent) => {
-    const msg = ev.data as Record<string, unknown> | null;
+  ch.onMessage((data) => {
+    const msg = data as Record<string, unknown> | null;
     if (!msg || typeof msg !== 'object') return;
 
     // Push path: relay sent a user-snapshot (cold-start handshake reply or
@@ -290,7 +278,7 @@ export function makeSteamApi(registry: Registry, bridge: Bridge): SteamApi {
   // the current user's core fields. If the relay isn't up yet, the request
   // is silently dropped and the framework stays at null until relay boots and
   // broadcasts proactively.
-  bc.postMessage({ kind: 'request-snapshot' });
+  ch.post({ kind: 'request-snapshot' });
 
   async function resolveCurrentSteamId(): Promise<string | undefined> {
     if (cachedUser?.steamId) return cachedUser.steamId;
@@ -334,7 +322,7 @@ export function makeSteamApi(registry: Registry, bridge: Bridge): SteamApi {
           resolve: () => { clearTimeout(timer); resolve(); },
           reject: (e: Error) => { clearTimeout(timer); reject(e); },
         });
-        bc.postMessage({ kind: 'navigate', requestId, url });
+        ch.post({ kind: 'navigate', requestId, url });
       });
     },
 

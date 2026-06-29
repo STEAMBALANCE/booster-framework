@@ -1,5 +1,4 @@
 import {
-  RELAY_CHANNEL,
   POPUP_ID_RE,
   POPUP_HTML_MAX_BYTES,
   type RelayMessage,
@@ -25,9 +24,20 @@ import { destroyPopup } from './popup-lifecycle';
 import type { SteamPopupParams } from './popup-types';
 import { makeWindowHandlers, type WindowTracking } from './window-handlers';
 import { setupExternalWindowRelay, teardownExternalWindowRelay } from './external-window';
-import { createBridge } from '../bridge';
+import { createBridge, createTokenBridge } from '../bridge';
+import type { SecContext } from '../sec';
+import { createRelayChannel, isTagged, type RelayPoster } from './channel';
 import { handleActivateProductKey } from './key-activation';
 import { handleGetMachineId } from './machine-id';
+
+/** Splits a `createPluginUi`-prefixed popupId (`<pluginId>__<userId>`) into
+ *  its owner and the user-facing key. Returns null for un-prefixed ids
+ *  (legacy / framework-internal) — those are not ownership-gated. */
+function splitPopupId(popupId: string): { owner: string; userKey: string } | null {
+  const i = popupId.indexOf('__');
+  if (i <= 0) return null;
+  return { owner: popupId.slice(0, i), userKey: popupId.slice(i + 2) };
+}
 
 declare global {
   interface SteamClientShape {
@@ -176,8 +186,13 @@ function getGateMs(): number {
  *
  *  `scope` is owned by the caller (bootstrap creates it). On teardown the
  *  scope is `_abort()`-ed; this is what removes the BC listener, clears
- *  blur-poll setInterval'ы, and cancels any other scope-tracked async. */
-export function startRelay(scope: ScopeApi): () => void {
+ *  blur-poll setInterval'ы, and cancels any other scope-tracked async.
+ *
+ *  `sec` is the parsed _sec context from `readAndConsumeSec()` (A4). When
+ *  `sec.frameworkToken` is set, the relay's native bridge is token-bound
+ *  to the framework identity so external-window native ops (setNativeWindowTitle,
+ *  injectTabTitleOverride, etc.) are attributed correctly by the router (A6). */
+export function startRelay(scope: ScopeApi, sec?: SecContext): () => void {
   if (window.__sb_relay_started) return () => {};
   window.__sb_relay_started = true;
 
@@ -200,7 +215,39 @@ export function startRelay(scope: ScopeApi): () => void {
   };
   window.__sb_relay_teardown = initialTeardown;
 
-  const bc = new BroadcastChannel(RELAY_CHANNEL);
+  // Authenticated relay channel. Outbound SharedToMain replies/events are
+  // tagged with the per-launch secret (via `post`); inbound MainToShared is
+  // dropped unless tagged (auth check in the listener below). `relaySecret`
+  // undefined ⇒ untagged passthrough (tests / pre-secret injector).
+  const relaySecret = sec?.relaySecret;
+  const ch = createRelayChannel(relaySecret);
+  const bc = ch.raw;
+  // Tagging poster: passed to every SharedToMain sub-handler so its replies
+  // carry the secret. The closure's own posts go through `post` too.
+  const post = (m: object): void => ch.post(m);
+  const poster: RelayPoster = { postMessage: (m) => ch.post(m as object) };
+  // popupId ownership: full popupId → owning pluginId (the `<pluginId>__`
+  // prefix). Keyed by the FULL popupId — suffix-keying (`userKey` alone)
+  // let pluginA squat common suffixes (e.g. `__main`, `__menu`) and deny
+  // pluginB's legitimate `pluginB__main` attach (cross-plugin DoS). With
+  // full-id keying, `pluginA__main` and `pluginB__main` are independent
+  // entries; only a forged second claim on the SAME full id is rejected.
+  // Un-prefixed ids are not gated (see splitPopupId).
+  const popupOwners = new Map<string, string>();
+  function ownershipConflict(popupId: string): boolean {
+    const s = splitPopupId(popupId);
+    if (!s) return false;
+    const cur = popupOwners.get(popupId);
+    return cur !== undefined && cur !== s.owner;
+  }
+  function claimOwnership(popupId: string): void {
+    const s = splitPopupId(popupId);
+    if (s && !popupOwners.has(popupId)) popupOwners.set(popupId, s.owner);
+  }
+  function releaseOwnership(popupId: string): void {
+    const s = splitPopupId(popupId);
+    if (s && popupOwners.get(popupId) === s.owner) popupOwners.delete(popupId);
+  }
   // Singleton map keyed by popupId. Re-attach with the same id reuses the
   // existing native window — refusing to allocate a second native popup is
   // the *whole point* of the attach-once / toggle-many model. Spawning a
@@ -210,7 +257,7 @@ export function startRelay(scope: ScopeApi): () => void {
   // Per-window tracking — shared with makeWindowHandlers so attach-popup's
   // idTaken can also see open windows (single-namespace: one id at a time).
   const windows = new Map<string, WindowTracking>();
-  const winHandlers = makeWindowHandlers({ bc, scope, popups, windows });
+  const winHandlers = makeWindowHandlers({ bc: poster, scope, popups, windows, relaySecret });
   // Set when teardown begins so a microtask-deferred attach (see
   // handleAttachPopup) skips its setup if the relay is being torn down.
   // Without this, an attach in flight at teardown time would create an
@@ -220,6 +267,11 @@ export function startRelay(scope: ScopeApi): () => void {
   scope.listen<MessageEvent>(bc, 'message', (ev) => {
     const msg = ev.data as RelayMessage;
     if (!msg || typeof msg !== 'object') return;
+    // Inbound auth: drop untagged/mistagged MainToShared. The two untrusted
+    // tabbed-shell carve-out kinds (external-window-native-title-request /
+    // -state-request) are NOT handled here — they go to the external-window
+    // listener which accepts them untagged — so this blanket drop is safe.
+    if (!isTagged(msg, relaySecret)) return;
     switch (msg.kind) {
       case 'attach-popup':
         handleAttachPopup(msg);
@@ -243,22 +295,22 @@ export function startRelay(scope: ScopeApi): () => void {
         handleNavigate(msg);
         break;
       case 'request-snapshot':
-        handleRequestSnapshot(bc);
+        handleRequestSnapshot(poster);
         break;
       case 'get-user-account-settings':
-        void handleGetUserAccountSettings(msg, bc);
+        void handleGetUserAccountSettings(msg, poster);
         break;
       case 'get-user-country':
-        void handleGetUserCountry(msg, bc);
+        void handleGetUserCountry(msg, poster);
         break;
       case 'get-user-language':
-        void handleGetUserLanguage(msg, bc);
+        void handleGetUserLanguage(msg, poster);
         break;
       case 'activate-product-key':
-        void handleActivateProductKey(msg, bc);
+        void handleActivateProductKey(msg, poster);
         break;
       case 'get-machine-id':
-        void handleGetMachineId(msg, bc);
+        void handleGetMachineId(msg, poster);
         break;
       case 'open-window':         winHandlers.handleOpenWindow(msg); break;
       case 'window-show':         winHandlers.handleShow(msg); break;
@@ -280,14 +332,22 @@ export function startRelay(scope: ScopeApi): () => void {
   // It broadcasts `user-snapshot` on every relevant change. Wiring the BC
   // handler first means main shell listeners (and re-injected relays) see
   // broadcasts from the very first callback.
-  installPushUserChangeListener(scope, bc);
+  installPushUserChangeListener(scope, poster);
 
   // Single relay-side bridge instance for external-window relay.
-  // `createBridge()` reassigns `window.__sb_resolve` each call, but the
-  // underlying `pending` map and `nextId` counter are module-level —
-  // multiple createBridge() calls are functionally idempotent.
+  // `createBridge()` registers its promise resolver under the per-launch
+  // secret name from `sec.resolverName` (falling back to `window.__sb_resolve`
+  // only when no name is set); either way the underlying `pending` map and
+  // `nextId` counter are module-level — multiple createBridge() calls are
+  // functionally idempotent.
   //
-  const relayBridge = createBridge();
+  // Bind to the framework token (A4 step 3b) so native-attributed ops
+  // (setNativeWindowTitle, injectTabTitleOverride, etc.) carry the framework
+  // identity in their IPC envelope, enabling router enforcement in A6.
+  const baseRelayBridge = createBridge(undefined, { resolverName: sec?.resolverName });
+  const relayBridge = sec?.frameworkToken
+    ? createTokenBridge(baseRelayBridge, sec.frameworkToken, 'booster-framework')
+    : baseRelayBridge;
 
   // Wire external-window relay: subscribes to MWBM store changes and
   // handles open/setUrl/close/native-title BC messages from main shell.
@@ -298,6 +358,7 @@ export function startRelay(scope: ScopeApi): () => void {
       bcChannel: bc,
       mwbmStore,
       bridge: relayBridge,
+      relaySecret,
     });
   } else {
     console.warn('[booster-relay] MWBM not available at bootstrap; external-window disabled');
@@ -329,7 +390,7 @@ export function startRelay(scope: ScopeApi): () => void {
     try { sc?.SetKeyFocus?.(true); } catch { /* */ }
     entry.lastStateChangeAt = performance.now();
     entry.visible = true;
-    bc.postMessage({ kind: 'popup-show-event', popupId });
+    post({ kind: 'popup-show-event', popupId });
   }
 
   function hidePopupNative(entry: PopupEntry, popupId: string, emitEvent: boolean): void {
@@ -339,7 +400,7 @@ export function startRelay(scope: ScopeApi): () => void {
     entry.visible = false;
     entry.lastStateChangeAt = performance.now();
     if (emitEvent) {
-      bc.postMessage({ kind: 'popup-hide-event', popupId });
+      post({ kind: 'popup-hide-event', popupId });
     }
   }
 
@@ -351,7 +412,7 @@ export function startRelay(scope: ScopeApi): () => void {
       // SharedJSContext); a malicious or buggy framework instance could
       // bypass ui.ts validation by posting straight to the BC channel.
       if (!POPUP_ID_RE.test(msg.popupId)) {
-        bc.postMessage({
+        post({
           kind: 'popup-attach-error',
           requestId: msg.requestId,
           popupId: msg.popupId,
@@ -359,8 +420,19 @@ export function startRelay(scope: ScopeApi): () => void {
         });
         return;
       }
+      // Ownership: a plugin may only attach a user-id its own prefix owns.
+      if (ownershipConflict(msg.popupId)) {
+        post({
+          kind: 'popup-attach-error',
+          requestId: msg.requestId,
+          popupId: msg.popupId,
+          error: 'popup id owned by another plugin',
+        });
+        return;
+      }
+      claimOwnership(msg.popupId);
       if (typeof msg.html !== 'string' || msg.html.length > POPUP_HTML_MAX_BYTES) {
-        bc.postMessage({
+        post({
           kind: 'popup-attach-error',
           requestId: msg.requestId,
           popupId: msg.popupId,
@@ -374,7 +446,7 @@ export function startRelay(scope: ScopeApi): () => void {
       // prefix scan (wrapper popup has name `${id}_uid0` matching the scan).
       // Spec § 5: attachPopup and openWindow cannot share an id.
       if (windows.has(msg.popupId)) {
-        bc.postMessage({
+        post({
           kind: 'popup-attach-error',
           requestId: msg.requestId,
           popupId: msg.popupId,
@@ -412,7 +484,7 @@ export function startRelay(scope: ScopeApi): () => void {
           if (existing.blurPollHandle !== null) clearInterval(existing.blurPollHandle);
           destroyPopup(existing.popup, existing.win);
           popups.delete(msg.popupId);
-          bc.postMessage({
+          post({
             kind: 'popup-attach-error',
             requestId: msg.requestId,
             popupId: msg.popupId,
@@ -424,7 +496,7 @@ export function startRelay(scope: ScopeApi): () => void {
         existing.height = msg.height;
         existing.hideOnBlur = msg.hideOnBlur;
         existing.lastStateChangeAt = 0; // reset gate stamp — fresh content / re-attach is semantically a new popup
-        bc.postMessage({
+        post({
           kind: 'popup-attached',
           requestId: msg.requestId,
           popupId: msg.popupId,
@@ -443,7 +515,7 @@ export function startRelay(scope: ScopeApi): () => void {
       //      callers' `await attachPopup` never hangs to the 5s timeout.
       Promise.resolve().then(() => attachPopupMicrotask(msg));
     } catch (e) {
-      bc.postMessage({
+      post({
         kind: 'popup-attach-error',
         requestId: msg.requestId,
         popupId: msg.popupId,
@@ -483,7 +555,7 @@ export function startRelay(scope: ScopeApi): () => void {
       });
 
       if (!result) {
-        bc.postMessage({
+        post({
           kind: 'popup-attach-error',
           requestId: msg.requestId,
           popupId: msg.popupId,
@@ -521,7 +593,7 @@ export function startRelay(scope: ScopeApi): () => void {
         lastStateChangeAt: 0,
       });
 
-      bc.postMessage({
+      post({
         kind: 'popup-attached',
         requestId: msg.requestId,
         popupId: msg.popupId,
@@ -530,7 +602,7 @@ export function startRelay(scope: ScopeApi): () => void {
       nativeWarn('attach-popup microtask threw', {
         popupId: msg.popupId, popupCount: popups.size, error: String(e),
       });
-      bc.postMessage({
+      post({
         kind: 'popup-attach-error',
         requestId: msg.requestId,
         popupId: msg.popupId,
@@ -540,6 +612,7 @@ export function startRelay(scope: ScopeApi): () => void {
   }
 
   function handlePopupShow(msg: PopupShowRequest): void {
+    if (ownershipConflict(msg.popupId)) { nativeWarn('popup-show denied: not owner', { popupId: msg.popupId }); return; }
     const entry = popups.get(msg.popupId);
     if (!entry || entry.popup.BIsClosed?.()) {
       // Either the caller raced ahead of the attach microtask (see the
@@ -552,6 +625,7 @@ export function startRelay(scope: ScopeApi): () => void {
   }
 
   function handlePopupHide(msg: PopupHideRequest): void {
+    if (ownershipConflict(msg.popupId)) { nativeWarn('popup-hide denied: not owner', { popupId: msg.popupId }); return; }
     const entry = popups.get(msg.popupId);
     if (!entry || entry.popup.BIsClosed?.()) {
       nativeWarn('popup-hide for unknown popupId', { popupId: msg.popupId });
@@ -561,6 +635,7 @@ export function startRelay(scope: ScopeApi): () => void {
   }
 
   function handlePopupToggle(msg: PopupToggleRequest): void {
+    if (ownershipConflict(msg.popupId)) { nativeWarn('popup-toggle denied: not owner', { popupId: msg.popupId }); return; }
     const entry = popups.get(msg.popupId);
     if (!entry || entry.popup.BIsClosed?.()) {
       nativeWarn('popup-toggle for unknown popupId', { popupId: msg.popupId });
@@ -578,11 +653,13 @@ export function startRelay(scope: ScopeApi): () => void {
   }
 
   function handlePopupDestroy(msg: PopupDestroyRequest): void {
+    if (ownershipConflict(msg.popupId)) { nativeWarn('popup-destroy denied: not owner', { popupId: msg.popupId }); return; }
     const entry = popups.get(msg.popupId);
-    if (!entry) return;  // destroy is idempotent — silent no-op is fine
+    if (!entry) { releaseOwnership(msg.popupId); return; }  // destroy is idempotent — silent no-op is fine
     if (entry.blurPollHandle !== null) clearInterval(entry.blurPollHandle);
     try { entry.popup.Close?.(); } catch { /* */ }
     popups.delete(msg.popupId);
+    releaseOwnership(msg.popupId);
   }
 
   function handlePopupPost(msg: PopupPostMessageRequest): void {
@@ -600,6 +677,7 @@ export function startRelay(scope: ScopeApi): () => void {
     // produce a popup-postMessage that arrives while our `popups` map is
     // empty. Logging on every such miss creates noise that doesn't
     // correlate with a user-visible failure.
+    if (ownershipConflict(msg.popupId)) return;
     const entry = popups.get(msg.popupId);
     if (!entry || entry.popup.BIsClosed?.()) return;
     try {
@@ -612,7 +690,7 @@ export function startRelay(scope: ScopeApi): () => void {
   function handleNavigate(msg: NavigateRequest): void {
     try {
       if (!window.MainWindowBrowserManager?.LoadURL) {
-        bc.postMessage({
+        post({
           kind: 'navigate-error',
           requestId: msg.requestId,
           error: 'MWBM unavailable',
@@ -620,9 +698,9 @@ export function startRelay(scope: ScopeApi): () => void {
         return;
       }
       window.MainWindowBrowserManager.LoadURL(msg.url);
-      bc.postMessage({ kind: 'navigate-done', requestId: msg.requestId });
+      post({ kind: 'navigate-done', requestId: msg.requestId });
     } catch (e) {
-      bc.postMessage({
+      post({
         kind: 'navigate-error',
         requestId: msg.requestId,
         error: String(e),

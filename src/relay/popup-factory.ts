@@ -127,6 +127,9 @@ interface CreateSteamWindowArgs {
   centerOnMain: boolean;
   iframeBackground?: string;
   embedOrigins?: string[];
+  /** Per-launch relay secret embedded into the wrapper HTML so its BC posts
+   *  are tagged (trusted, iframe-isolated). Omitted ⇒ untagged (tests). */
+  relaySecret?: string;
 }
 
 export function createSteamWindow(args: CreateSteamWindowArgs):
@@ -146,6 +149,7 @@ export function createSteamWindow(args: CreateSteamWindowArgs):
     content:  args.content,
     iframeBackground: args.iframeBackground,
     embedOrigins: args.embedOrigins,
+    relaySecret: args.relaySecret,
   });
 
   // Compute centered position UPFRONT so the popup opens already-centered

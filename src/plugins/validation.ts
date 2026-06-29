@@ -12,6 +12,10 @@ export interface ManifestPluginEntry {
    *  (e.g. booster-checkout). Verifier enforces this can only be set by trusted
    *  manifest authors. */
   required?: boolean;
+  /** Foreign bus topics the plugin is allowed to subscribe to. Each entry
+   *  is either an exact topic string or a `prefix.*` glob. Own-prefix
+   *  (`<pluginId>.*`) is always allowed regardless of this list. */
+  subscribeTopics?: string[];
 }
 
 export type ValidationResult =

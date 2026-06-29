@@ -1,6 +1,6 @@
 import type { KeysApi, ActivateOutcome } from './api-types';
 import type { Registry } from '../registry';
-import { RELAY_CHANNEL } from '../relay/protocol';
+import { createRelayChannel } from '../relay/channel';
 
 const KEYS_REQUEST_ID_BASE = 300_000;
 
@@ -20,8 +20,16 @@ export class KeyActivationTransportError extends Error {
   constructor(message: string) { super(message); this.name = 'KeyActivationTransportError'; }
 }
 
-export function makeKeysApi(registry: Registry): KeysApi {
-  const bc = new BroadcastChannel(RELAY_CHANNEL);
+export function makeKeysApi(
+  registry: Registry,
+  // Per-launch relay secret: outbound `activate-product-key` is tagged and
+  // inbound `activate-product-key-ok/error` lacking the tag is dropped.
+  // undefined ⇒ untagged passthrough (tests / pre-secret injector).
+  relaySecret?: string,
+  // Test-only seam: inject a fake BroadcastChannel constructor.
+  _bcCtor?: new (channel: string) => BroadcastChannel,
+): KeysApi {
+  const ch = createRelayChannel(relaySecret, _bcCtor);
   let nextRequestId = KEYS_REQUEST_ID_BASE;
   const pending = new Map<number, { reject: (e: Error) => void; cleanup: () => void }>();
 
@@ -33,7 +41,7 @@ export function makeKeysApi(registry: Registry): KeysApi {
         try { p.reject(new KeyActivationTransportError('framework rolled back')); } catch { /* */ }
       }
       pending.clear();
-      try { bc.close(); } catch { /* */ }
+      try { ch.close(); } catch { /* */ }
     },
   });
 
@@ -43,20 +51,19 @@ export function makeKeysApi(registry: Registry): KeysApi {
       if (productKey.length > 256) throw new Error('invalid product key (too long)');
       const requestId = nextRequestId++;
       return new Promise<ActivateOutcome>((resolve, reject) => {
-        const cleanup = () => { clearTimeout(timer); bc.removeEventListener('message', handler); pending.delete(requestId); };
+        const cleanup = () => { clearTimeout(timer); off(); pending.delete(requestId); };
         const timer = setTimeout(() => {
           cleanup();
           reject(new KeyActivationTransportError('activation timeout — status unknown, do not retry'));
         }, relayTimeoutMs());
-        const handler = (ev: MessageEvent) => {
-          const m = ev.data as { kind?: string; requestId?: number; outcome?: ActivateOutcome; error?: string } | undefined;
+        const off = ch.onMessage((data) => {
+          const m = data as { kind?: string; requestId?: number; outcome?: ActivateOutcome; error?: string } | undefined;
           if (m?.requestId !== requestId) return;
           if (m.kind === 'activate-product-key-ok') { cleanup(); resolve(m.outcome!); }
           else if (m.kind === 'activate-product-key-error') { cleanup(); reject(new KeyActivationTransportError(m.error ?? 'activation transport failure')); }
-        };
+        });
         pending.set(requestId, { reject, cleanup });
-        bc.addEventListener('message', handler);
-        bc.postMessage({ kind: 'activate-product-key', requestId, key: productKey });
+        ch.post({ kind: 'activate-product-key', requestId, key: productKey });
       });
     },
   };

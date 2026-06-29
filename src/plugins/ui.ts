@@ -21,7 +21,7 @@ function prefixId(pluginId: string, userId: string): string {
  * '<pluginId>__sb_topup' (double underscore separator per H4 fix).
  */
 export function createPluginUi(realUi: UiApi, pluginId: string): UiApi {
-  return {
+  return Object.freeze({
     addHeaderButton(opts: HeaderButtonOptions): HeaderButtonHandle {
       return realUi.addHeaderButton({ ...opts, id: prefixId(pluginId, opts.id) });
     },
@@ -36,5 +36,5 @@ export function createPluginUi(realUi: UiApi, pluginId: string): UiApi {
     ): Promise<OpenExternalWindowHandle> {
       return await realUi.openExternalWindow({ ...opts, id: prefixId(pluginId, opts.id) });
     },
-  };
+  });
 }

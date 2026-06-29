@@ -1,4 +1,5 @@
 import type { GetMachineIdRequest } from './protocol';
+import type { RelayPoster } from './channel';
 import type { MachineId } from '../api/api-types';
 
 // Steam's Auth.GetMachineID() returns a Valve-binary KeyValues
@@ -41,7 +42,7 @@ let cached: MachineId | undefined = undefined;
 /** @internal — test-only: reset the in-module machine-id cache between tests. */
 export function __resetMachineIdCacheForTest(): void { cached = undefined; }
 
-export async function handleGetMachineId(msg: GetMachineIdRequest, bc: BroadcastChannel): Promise<void> {
+export async function handleGetMachineId(msg: GetMachineIdRequest, bc: RelayPoster): Promise<void> {
   if (cached) {
     bc.postMessage({ kind: 'machine-id-ok', requestId: msg.requestId, value: cached });
     return;

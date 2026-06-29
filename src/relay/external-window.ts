@@ -7,6 +7,7 @@ import type {
   ExternalWindowStateEvent,
 } from './protocol';
 import type { Bridge } from '../bridge';
+import { isTagged, RELAY_SECRET_FIELD } from './channel';
 import { canonicalUrl, redactErr } from './url-helpers';
 
 interface OurEntry {
@@ -33,6 +34,13 @@ let mwbmSubscriptionUnreg: (() => void) | null = null;
 let bcChannel: { postMessage: (m: any) => void } | null = null;
 let mwbmStore: any = null;  // injected from bootstrap (or test)
 let bridge: Bridge | null = null;
+// Per-launch relay secret. Replies to the TRUSTED main-shell consumer
+// (external-window-open-reply / external-window-close-event) are tagged with
+// it; inbound trusted kinds (open/set-url/close) require it. The OUTBOUND
+// `external-window-state` is deliberately posted UNTAGGED (see broadcastState)
+// because its consumer is the UNTRUSTED C++ tabbed-shell controller — tagging
+// would leak the secret to co-resident web content. undefined ⇒ no auth.
+let relaySecret: string | undefined = undefined;
 // Suppresses MWBM callback during our own Add/Remove operations.
 // Without this, AddWebPageRequest fires the callback synchronously,
 // onMWBMChange broadcasts state before ourEntries is updated, and the
@@ -44,6 +52,7 @@ const ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
 export function _internal_setBcChannel(bc: { postMessage: (m: any) => void }): void { bcChannel = bc; }
 export function _internal_setMwbmStore(s: any): void { mwbmStore = s; }
 export function _internal_setBridge(b: Bridge | null): void { bridge = b; }
+export function _internal_setSecret(s: string | undefined): void { relaySecret = s; }
 export function _internal_getOurEntries(): Map<string, OurEntry> { return ourEntries; }
 export function _internal_resetRelay(): void {
   ourEntries.clear();
@@ -52,7 +61,14 @@ export function _internal_resetRelay(): void {
   bcChannel = null;
   mwbmStore = null;
   bridge = null;
+  relaySecret = undefined;
   suppressMwbmCallback = false;
+}
+
+/** Tagged post for replies destined for the TRUSTED main-shell consumer
+ *  (api/external-window.ts). NOT used for external-window-state. */
+function postTagged(msg: object): void {
+  bcChannel?.postMessage(relaySecret !== undefined ? { ...msg, [RELAY_SECRET_FIELD]: relaySecret } : msg);
 }
 
 function validateOpenMessage(m: ExternalWindowOpenRequest): string | null {
@@ -103,7 +119,7 @@ function onMWBMChange(store: any): void {
   }
   for (const id of closedIds) {
     ourEntries.delete(id);
-    bcChannel?.postMessage({ kind: 'external-window-close-event', id });
+    postTagged({ kind: 'external-window-close-event', id });
   }
   broadcastState(store);
 }
@@ -139,6 +155,9 @@ function broadcastState(store: any): void {
     ...(activeTitle !== undefined ? { activeTitle } : {}),
     manifestHints: getManifestTabbedShellHints(),
   };
+  // UNTAGGED on purpose: external-window-state is consumed by the untrusted
+  // C++ tabbed-shell controller (co-resident with web content). Tagging would
+  // leak the per-launch secret. See relaySecret comment above.
   bcChannel?.postMessage(event);
 }
 
@@ -153,7 +172,7 @@ function getManifestTabbedShellHints(): string[] {
 
 function replyOpen(requestId: number, payload: { ok: true } | { ok: false; error: string }): void {
   const reply: ExternalWindowOpenReply = { kind: 'external-window-open-reply', requestId, ...payload };
-  bcChannel?.postMessage(reply);
+  postTagged(reply);
 }
 
 export async function handleOpen(msg: ExternalWindowOpenRequest): Promise<void> {
@@ -285,7 +304,7 @@ export async function handleSetUrl(msg: ExternalWindowSetUrlRequest): Promise<vo
   if (!ours) {
     console.error('[booster-relay] setUrl: new request not surfaced');
     ourEntries.delete(msg.id);
-    bcChannel?.postMessage({ kind: 'external-window-close-event', id: msg.id });
+    postTagged({ kind: 'external-window-close-event', id: msg.id });
     return;
   }
   entry.reqId = ours.requestid;  // CRITICAL: before Remove (entry re-fetched above; mutates live map object)
@@ -345,17 +364,32 @@ export interface ExternalWindowRelayDeps {
   bcChannel: { postMessage: (m: any) => void; addEventListener: (t: string, cb: any) => void };
   mwbmStore: any;
   bridge: Bridge;
+  /** Per-launch relay secret. undefined ⇒ no auth (tests / pre-secret injector). */
+  relaySecret?: string;
 }
+
+// The two kinds the UNTRUSTED C++ tabbed-shell controller posts. Accepted
+// UNTAGGED (the controller has no secret) but still structurally validated in
+// their handlers. Everything else (open/set-url/close) is TRUSTED main-shell
+// traffic and requires the tag.
+const CARVE_OUT_KINDS = new Set([
+  'external-window-native-title-request',
+  'external-window-state-request',
+]);
 
 export function setupExternalWindowRelay(deps: ExternalWindowRelayDeps): void {
   bcChannel = deps.bcChannel;
   mwbmStore = deps.mwbmStore;
   bridge = deps.bridge;
+  relaySecret = deps.relaySecret;
   ensureSubscription(mwbmStore);
 
   deps.bcChannel.addEventListener('message', (e: { data: unknown }) => {
     const m = e.data as any;
     if (!m || typeof m !== 'object') return;
+    // Auth: trusted kinds require the tag; carve-out kinds are accepted
+    // untagged (untrusted tabbed-shell origin) and validated structurally.
+    if (!CARVE_OUT_KINDS.has(m.kind) && !isTagged(m, relaySecret)) return;
     switch (m.kind) {
       case 'external-window-open': void handleOpen(m).catch(e => console.error('[booster-relay] handleOpen threw:', e)); break;
       case 'external-window-set-url': void handleSetUrl(m).catch(e => console.error('[booster-relay] handleSetUrl threw:', e)); break;
@@ -376,4 +410,5 @@ export function teardownExternalWindowRelay(): void {
   bcChannel = null;
   mwbmStore = null;
   bridge = null;
+  relaySecret = undefined;
 }

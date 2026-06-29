@@ -18,7 +18,10 @@ import {
  * `ctx.granted.has(Capability.X)` before using.
  */
 export function buildGatedSb(real: SbApi, granted: ReadonlySet<Capability>): SbApi {
-  return {
+  // Freeze so plugins cannot replace or add API surface on their own ctx.sb.
+  // Object.freeze with a getter is fine — the getter still runs; only the
+  // mutable lifecycleState holder (inside index.ts closure) is not frozen.
+  return Object.freeze({
     version: real.version,
     // Forward the live value so plugins observe loading → ready transitions
     // (a by-value snapshot would freeze whatever state existed at build time).
@@ -34,5 +37,5 @@ export function buildGatedSb(real: SbApi, granted: ReadonlySet<Capability>): SbA
     bus:     granted.has(Capability.Bus)     ? real.bus     : (undefined as never),
     pages:   granted.has(Capability.Pages)   ? real.pages   : (undefined as never),
     keys:    granted.has(Capability.Keys)    ? real.keys    : (undefined as never),
-  };
+  });
 }

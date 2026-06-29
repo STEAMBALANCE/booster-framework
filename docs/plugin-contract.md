@@ -309,6 +309,44 @@ interface PluginContext {
 - `apiVersion` не в `SUPPORTED_API_VERSIONS` → warn skip.
 - `urlPatterns` не матчат текущий URL → silent skip.
 
+## Bus subscribe ACL (`subscribeTopics`)
+
+Плагин с `Capability.Bus` может вызвать `ctx.sb.bus.subscribe(topic, cb)`:
+
+- **Свой prefix** (`<pluginId>.<anything>`) разрешён всегда.
+- **Чужие топики** — только если перечислены в поле `subscribeTopics`
+  подписанной manifest-записи этого плагина. Нарушение → синхронный throw
+  (аналогично `bus.publish` на чужой prefix).
+
+`subscribeTopics` — необязательное поле в manifest-записи; по умолчанию
+`[]`. Каждый элемент — либо точный топик, либо глоб `prefix.*`:
+
+| Запись в `subscribeTopics` | Что матчится                           |
+|----------------------------|----------------------------------------|
+| `"other-plugin.event"`     | только `"other-plugin.event"` (точное) |
+| `"other-plugin.*"`         | `"other-plugin"` и `"other-plugin.<x>"` |
+
+Для внутренних плагинов (`requiredPlugins[]`) поле задаётся в
+`packages/<id>/src/plugin-meta.ts` → `subscribeTopics: [...]` и
+проходит через pipeline в signed manifest автоматически.
+
+Сторонние плагины (`approvedPlugins[]`) передают `subscribeTopics` через
+`just approve-plugin add --subscribe-topics <comma-separated>`.
+
+Пример: плагин `booster-checkout` подписывается на топики addfunds:
+
+```ts
+// plugin-meta.ts
+export const pluginMeta: PluginMeta = {
+  id: 'booster-checkout',
+  // ...
+  subscribeTopics: [
+    'booster-addfunds.topup-requested',
+    'booster-addfunds.user.snapshot.request',
+  ],
+};
+```
+
 ## Lifecycle sequence
 
 ```

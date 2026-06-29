@@ -18,6 +18,7 @@ import type {
 import { createSteamWindow } from './popup-factory';
 import { destroyPopup } from './popup-lifecycle';
 import type { SteamPopupInstance, SteamPopupWindow } from './popup-types';
+import type { RelayPoster } from './channel';
 
 // Width/height clamps — caller-supplied values outside [200..2000] x
 // [150..1500] get squished into range. Mirror of framework-side ui.ts
@@ -94,12 +95,15 @@ function utf8ByteLength(s: string): number {
 }
 
 export function makeWindowHandlers(args: {
-  bc: BroadcastChannel;
+  bc: RelayPoster;
   scope: ScopeLike;
   popups: Map<string, unknown>;
   windows: Map<string, WindowTracking>;
+  /** Per-launch relay secret — embedded into openWindow wrapper HTML so its
+   *  BC posts are tagged. Omitted ⇒ untagged (tests / pre-secret injector). */
+  relaySecret?: string;
 }) {
-  const { bc, scope, popups, windows } = args;
+  const { bc, scope, popups, windows, relaySecret } = args;
 
   // Defense-in-depth: an id is "taken" if EITHER an active attachPopup
   // OR another open-window already owns it. Matches the framework-side
@@ -178,6 +182,7 @@ export function makeWindowHandlers(args: {
       centerOnMain: req.centerOnMain,
       iframeBackground: req.iframeBackground,
       embedOrigins,
+      relaySecret,
     });
 
     if (!created) return rejectOpen(req, 'createSteamWindow returned null');

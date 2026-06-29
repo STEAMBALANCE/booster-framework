@@ -21,14 +21,14 @@ function makeMockBus(): { publishes: PublishCall[]; subscribes: SubCall[]; unsub
 test('publish from booster-test rejects non-prefixed topic', () => {
   const realBus = makeMockBus();
   const ctrl = new AbortController();
-  const wrapped = createPluginBus(realBus, 'booster-test', ctrl.signal);
+  const wrapped = createPluginBus(realBus, 'booster-test', ctrl.signal, []);
   expect(() => wrapped.publish('foo.bar', {})).toThrow(/must start with 'booster-test\.'/);
 });
 
 test('publish accepts exact pluginId prefix with dot separator', () => {
   const realBus = makeMockBus();
   const ctrl = new AbortController();
-  const wrapped = createPluginBus(realBus, 'booster-test', ctrl.signal);
+  const wrapped = createPluginBus(realBus, 'booster-test', ctrl.signal, []);
   expect(() => wrapped.publish('booster-test.foo', {})).not.toThrow();
   expect(realBus.publishes).toEqual([{ topic: 'booster-test.foo', data: {} }]);
 });
@@ -36,23 +36,56 @@ test('publish accepts exact pluginId prefix with dot separator', () => {
 test('publish rejects topic that shares prefix but no dot separator', () => {
   const realBus = makeMockBus();
   const ctrl = new AbortController();
-  const wrapped = createPluginBus(realBus, 'booster-test', ctrl.signal);
+  const wrapped = createPluginBus(realBus, 'booster-test', ctrl.signal, []);
   expect(() => wrapped.publish('booster-test-foo.bar', {})).toThrow(/must start with/);
 });
 
-test('subscribe is unrestricted by topic prefix', () => {
+test('subscribe to own-prefix allowed with empty subscribeTopics', () => {
   const realBus = makeMockBus();
   const ctrl = new AbortController();
-  const wrapped = createPluginBus(realBus, 'booster-test', ctrl.signal);
-  expect(() => wrapped.subscribe('other.topic', () => {})).not.toThrow();
+  const wrapped = createPluginBus(realBus, 'booster-test', ctrl.signal, []);
+  expect(() => wrapped.subscribe('booster-test.topic', () => {})).not.toThrow();
   expect(realBus.subscribes).toHaveLength(1);
+});
+
+test('subscribe to undeclared foreign topic throws', () => {
+  const realBus = makeMockBus();
+  const ctrl = new AbortController();
+  const wrapped = createPluginBus(realBus, 'booster-test', ctrl.signal, []);
+  expect(() => wrapped.subscribe('other.topic', () => {})).toThrow(/not allowed/);
+});
+
+test('subscribe to declared foreign exact topic is allowed', () => {
+  const realBus = makeMockBus();
+  const ctrl = new AbortController();
+  const wrapped = createPluginBus(realBus, 'booster-test', ctrl.signal, ['other-plugin.event']);
+  expect(() => wrapped.subscribe('other-plugin.event', () => {})).not.toThrow();
+  expect(realBus.subscribes).toHaveLength(1);
+});
+
+test('subscribe to declared foreign glob prefix is allowed (exact prefix and sub-topics)', () => {
+  const realBus = makeMockBus();
+  const ctrl = new AbortController();
+  const wrapped = createPluginBus(realBus, 'booster-test', ctrl.signal, ['other-plugin.*']);
+  // sub-topic match
+  expect(() => wrapped.subscribe('other-plugin.event', () => {})).not.toThrow();
+  // exact prefix match
+  expect(() => wrapped.subscribe('other-plugin', () => {})).not.toThrow();
+  expect(realBus.subscribes).toHaveLength(2);
+});
+
+test('subscribe to undeclared foreign topic throws even with some subscribeTopics', () => {
+  const realBus = makeMockBus();
+  const ctrl = new AbortController();
+  const wrapped = createPluginBus(realBus, 'booster-test', ctrl.signal, ['other-plugin.event']);
+  expect(() => wrapped.subscribe('third-plugin.event', () => {})).toThrow(/not allowed/);
 });
 
 test('subscribe auto-cleans on scope abort', () => {
   const realBus = makeMockBus();
   const ctrl = new AbortController();
-  const wrapped = createPluginBus(realBus, 'booster-test', ctrl.signal);
-  wrapped.subscribe('foo.bar', () => {});
+  const wrapped = createPluginBus(realBus, 'booster-test', ctrl.signal, []);
+  wrapped.subscribe('booster-test.foo', () => {});
   expect(realBus.unsubscribed).toBe(0);
   ctrl.abort();
   expect(realBus.unsubscribed).toBe(1);
@@ -62,8 +95,8 @@ test('subscribe on already-aborted signal returns no-op unsub immediately', () =
   const realBus = makeMockBus();
   const ctrl = new AbortController();
   ctrl.abort();
-  const wrapped = createPluginBus(realBus, 'booster-test', ctrl.signal);
-  const unsub = wrapped.subscribe('foo.bar', () => {});
+  const wrapped = createPluginBus(realBus, 'booster-test', ctrl.signal, []);
+  const unsub = wrapped.subscribe('booster-test.foo', () => {});
   expect(realBus.unsubscribed).toBe(1);  // unsub'd by createPluginBus immediately
   unsub();  // no-op
   expect(realBus.unsubscribed).toBe(1);  // still 1
@@ -88,7 +121,7 @@ test('manual unsubscribe removes the abort listener (net 0 leaked listeners)', (
       return (realRemove as (...a: unknown[]) => void)(type, ...rest);
     }) as typeof signal.removeEventListener;
 
-  const wrapped = createPluginBus(realBus, 'booster-test', signal);
+  const wrapped = createPluginBus(realBus, 'booster-test', signal, []);
   const N = 5;
   for (let i = 0; i < N; i++) {
     const unsub = wrapped.subscribe(`booster-test.topic${i}`, () => {});

@@ -163,6 +163,42 @@ describe('makeBusApi', () => {
     scope._abort();
   });
 
+  describe('secret dispatch name (B6)', () => {
+    test('dispatch fn registered non-enumerable under the secret name', () => {
+      const bridge = fakeBridge();
+      const scope = createScope();
+      makeBusApi(scope, bridge, 'sb_ef01');
+      const desc = Object.getOwnPropertyDescriptor(globalThis, 'sb_ef01');
+      expect(desc).toBeDefined();
+      expect(desc!.enumerable).toBe(false);
+      scope._abort();
+    });
+
+    test('remote-dispatch sim via secret name reaches subscribers', () => {
+      const bridge = fakeBridge();
+      const scope = createScope();
+      const bus = makeBusApi(scope, bridge, 'sb_ef02');
+      const received: any[] = [];
+      bus.subscribe('t', (d) => received.push(d));
+      (globalThis as any)['sb_ef02']('t', { v: 99 });
+      expect(received).toEqual([{ v: 99 }]);
+      scope._abort();
+    });
+
+    test('overwriting __sb_bus_dispatch has no effect when secret name is used', () => {
+      const bridge = fakeBridge();
+      const scope = createScope();
+      const bus = makeBusApi(scope, bridge, 'sb_ef03');
+      const received: any[] = [];
+      bus.subscribe('t', (d) => received.push(d));
+      // A plugin overwrites the legacy global — dispatch via secret name is unaffected.
+      (globalThis as any).__sb_bus_dispatch = () => { /* should not be called */ };
+      (globalThis as any)['sb_ef03']('t', { v: 1 });
+      expect(received).toEqual([{ v: 1 }]);
+      scope._abort();
+    });
+  });
+
   test('dispatch on unmatched topic warns in dev (S-2 dev-only diagnostic)', () => {
     // The dev-warn routes through `nativeWarn` (NOT console.warn) so it
     // surfaces in the C++ log sink even when DevTools is closed — matches
@@ -173,14 +209,14 @@ describe('makeBusApi', () => {
     const bridge = fakeBridge();
     const scope = createScope();
     makeBusApi(scope, bridge);
-    const origNative = (window as unknown as { __sb_native?: unknown }).__sb_native;
+    const origNative = (globalThis as unknown as { __sb_native?: unknown }).__sb_native;
     const nativeCalls: string[] = [];
-    (window as unknown as { __sb_native?: (s: string) => void }).__sb_native =
+    (globalThis as unknown as { __sb_native?: (s: string) => void }).__sb_native =
       (s: string) => { nativeCalls.push(s); };
     try {
       (globalThis as any).__sb_bus_dispatch('never-subscribed-topic', {});
     } finally {
-      (window as unknown as { __sb_native?: unknown }).__sb_native = origNative;
+      (globalThis as unknown as { __sb_native?: unknown }).__sb_native = origNative;
     }
     expect(nativeCalls.length).toBe(1);
     const payload = JSON.parse(nativeCalls[0]!);

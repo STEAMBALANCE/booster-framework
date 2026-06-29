@@ -1,6 +1,36 @@
 import type { OpenExternalWindowHandle, OpenExternalWindowOptions } from './api-types';
+import { isTagged, stripTag, RELAY_SECRET_FIELD } from '../relay/channel';
 
 const ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
+
+interface BcLike {
+  postMessage: (m: any) => void;
+  addEventListener: (t: string, cb: (e: { data: unknown }) => void) => void;
+  removeEventListener?: (t: string, cb: (e: { data: unknown }) => void) => void;
+}
+
+/** Wraps a raw sb_cmd channel so all outbound external-window messages carry
+ *  the per-launch secret and inbound replies/events lacking it are dropped.
+ *  `secret === undefined` ⇒ passthrough (tests / pre-secret injector). */
+function makeAuthChannel(bc: BcLike, secret: string | undefined): BcLike {
+  if (secret === undefined) return bc;
+  const wrappers = new WeakMap<(e: { data: unknown }) => void, (e: { data: unknown }) => void>();
+  return {
+    postMessage: (m: any) => bc.postMessage({ ...m, [RELAY_SECRET_FIELD]: secret }),
+    addEventListener: (t, cb) => {
+      const wrapped = (e: { data: unknown }) => {
+        if (!isTagged(e.data, secret)) return;
+        cb({ data: stripTag(e.data as object) });
+      };
+      wrappers.set(cb, wrapped);
+      bc.addEventListener(t, wrapped);
+    },
+    removeEventListener: (t, cb) => {
+      const wrapped = wrappers.get(cb);
+      if (wrapped) bc.removeEventListener?.(t, wrapped);
+    },
+  };
+}
 const TITLE_MIN = 1;
 const TITLE_MAX = 200;
 
@@ -99,15 +129,19 @@ export function validateUrl(url: string, label: string): void {
 
 export interface ExternalWindowApiDeps {
   bcChannel: BroadcastChannel | { postMessage: (m: any) => void; addEventListener: (t: string, cb: any) => void };
+  /** Per-launch relay secret (from `_sec.relaySecret`). Tags outbound and
+   *  filters inbound. Omitted ⇒ untagged passthrough. */
+  relaySecret?: string;
 }
 
 export function createExternalWindowApi(deps: ExternalWindowApiDeps) {
-  _internal_installReplyRouter(deps.bcChannel as any);
+  const ch = makeAuthChannel(deps.bcChannel as BcLike, deps.relaySecret);
+  _internal_installReplyRouter(ch as any);
 
   return {
     async openExternalWindow(opts: OpenExternalWindowOptions): Promise<OpenExternalWindowHandle> {
       validateOpts(opts);
-      const reply = await _internal_bcRequest(deps.bcChannel as any, {
+      const reply = await _internal_bcRequest(ch as any, {
         kind: 'external-window-open',
         id: opts.id,
         url: opts.url,
@@ -115,7 +149,7 @@ export function createExternalWindowApi(deps: ExternalWindowApiDeps) {
         ...(opts.taskbarTitle !== undefined ? { taskbarTitle: opts.taskbarTitle } : {}),
       });
       if (!reply.ok) throw new Error(`openExternalWindow: ${reply.error ?? 'unknown error'}`);
-      return makeHandle(opts.id, deps.bcChannel as any);
+      return makeHandle(opts.id, ch as any);
     },
   };
 }

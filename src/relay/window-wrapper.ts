@@ -3,6 +3,7 @@
 // document.write'n into popup window by createSteamWindow.
 
 import { RELAY_CHANNEL, WINDOW_MESSAGE_MAX_BYTES } from './protocol';
+import { RELAY_SECRET_FIELD } from './channel';
 import { LL } from '../i18n';
 // Static wrapper chrome. Single source of truth is the .css; dev/tests read it
 // raw via the `type: 'text'` import, production injects a minified copy through
@@ -38,6 +39,11 @@ export interface WrapperArgs {
   /** Allowlist дополнительных origin'ов (помимо origin стартового url),
    *  которым обёртка отвечает на sb:ready. Default = [FRAME_ORIGIN]. */
   embedOrigins?: string[];
+  /** Per-launch relay secret. The openWindow wrapper is TRUSTED (its untrusted
+   *  content is a cross-origin iframe, isolated from this BC realm), so it
+   *  bears the secret: outbound `window-user-close` / `window-message` are
+   *  tagged so the relay + ui.ts accept them. Omitted ⇒ untagged (tests). */
+  relaySecret?: string;
 }
 
 function escapeHtmlAttr(s: string): string {
@@ -101,6 +107,8 @@ export function composeWrapperHtml(args: WrapperArgs): string {
   const escapedTitle  = escapeHtmlText(args.title);
   const idLiteral     = JSON.stringify(args.windowId);
   const channelLiteral = JSON.stringify(RELAY_CHANNEL);
+  const secretLiteral  = JSON.stringify(args.relaySecret ?? null);
+  const secretFieldLiteral = JSON.stringify(RELAY_SECRET_FIELD);
   // Default '#fff' covers chat embeds + most light-themed pages.
   // No escaping here because we trust the caller (mirrors the html-mode
   // trust boundary documented in WrapperArgs.iframeBackground).
@@ -153,10 +161,18 @@ export function composeWrapperHtml(args: WrapperArgs): string {
     const EMBED_ORIGINS = ${embedOriginsLiteral};
     const APP_VERSION = ${appVersionLiteral};
     const MSG_CAP = ${MSG_CAP};
+    const SB_SEC = ${secretLiteral};
+    const SB_SEC_FIELD = ${secretFieldLiteral};
     const sbBC = new BroadcastChannel(${channelLiteral});
+    // Tag outbound so the relay (window-user-close) + ui.ts (window-message)
+    // accept it; the wrapper is trusted (iframe-isolated) and bears the secret.
+    function sbPost(m) {
+      if (SB_SEC) { const o = Object.assign({}, m); o[SB_SEC_FIELD] = SB_SEC; sbBC.postMessage(o); }
+      else sbBC.postMessage(m);
+    }
     const frame = document.getElementById('booster-win-frame');
     document.getElementById('booster-win-close').addEventListener('click', () => {
-      try { sbBC.postMessage({ kind:'window-user-close', windowId: POPUP_ID }); } catch (e) {}
+      try { sbPost({ kind:'window-user-close', windowId: POPUP_ID }); } catch (e) {}
       try { window.SteamClient.Window.Close(); } catch (e) {}
     });
     function buildEmbed() {
@@ -185,7 +201,7 @@ export function composeWrapperHtml(args: WrapperArgs): string {
       // асимметрия с outbound (UTF-8 байты в ui.ts); оба ~16 КБ, точная
       // мера не критична, это backstop против флуда.
       try { if (JSON.stringify(d).length > MSG_CAP) return; } catch (er) { return; }
-      try { sbBC.postMessage({ kind:'window-message', windowId: POPUP_ID, data: d }); } catch (er) {}
+      try { sbPost({ kind:'window-message', windowId: POPUP_ID, data: d }); } catch (er) {}
     }
     window.addEventListener('message', onFrameMsg);
     const handleBc = ${handleWrapperBcMessage.toString()};

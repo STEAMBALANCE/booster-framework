@@ -16,7 +16,9 @@
 
 export function nativeWarn(message: string, context: Record<string, unknown> = {}): void {
   try {
-    const native = (window as unknown as { __sb_native?: (s: string) => void }).__sb_native;
+    // Use globalThis (not window) — equivalent in browsers; also works in bun
+    // test environment and service workers where `window` is not defined.
+    const native = (globalThis as unknown as { __sb_native?: (s: string) => void }).__sb_native;
     if (typeof native === 'function') {
       native(JSON.stringify({
         op: 'log',

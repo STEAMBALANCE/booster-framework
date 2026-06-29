@@ -487,7 +487,10 @@ export interface BusApi {
    *  from another target. Errors thrown by cb are caught and logged via
    *  `console.error` (do not propagate — a faulty subscriber must not
    *  starve other subscribers on the same topic). Returns unsubscribe.
-   *  scope.abort drops all subs automatically. */
+   *  scope.abort drops all subs automatically.
+   *  Throws synchronously for unauthorized topics: plugin may subscribe to
+   *  its own `<pluginId>.*` always; foreign topics require a matching entry
+   *  in the signed manifest's `subscribeTopics` allow-list. */
   subscribe(topic: string, cb: (data: unknown) => void): () => void;
 }
 

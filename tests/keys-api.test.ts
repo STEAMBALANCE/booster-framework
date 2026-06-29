@@ -32,7 +32,7 @@ describe('makeKeysApi.activate', () => {
   it('resolves the outcome on activate-product-key-ok', async () => {
     relay((_key, requestId) => ({ kind: 'activate-product-key-ok', requestId, outcome: { ok: true, products: [], transactionId: '1' } }));
     const apiChannelIndex = FakeBC.channels.length; // capture before makeKeysApi allocates its channel
-    const api = makeKeysApi(fakeRegistry);
+    const api = makeKeysApi(fakeRegistry, undefined, FakeBC as never);
     await expect(api.activate('2QX39-NA5AL-RIFKG')).resolves.toEqual({ ok: true, products: [], transactionId: '1' });
     // After success, the handler must have been removed — no lingering listeners.
     expect(FakeBC.channels[apiChannelIndex].listeners.size).toBe(0);
@@ -40,19 +40,19 @@ describe('makeKeysApi.activate', () => {
 
   it('throws KeyActivationTransportError on activate-product-key-error', async () => {
     relay((_key, requestId) => ({ kind: 'activate-product-key-error', requestId, error: 'disconnected' }));
-    const api = makeKeysApi(fakeRegistry);
+    const api = makeKeysApi(fakeRegistry, undefined, FakeBC as never);
     await expect(api.activate('X')).rejects.toBeInstanceOf(KeyActivationTransportError);
   });
 
   it('rejects an empty key without posting', async () => {
-    const api = makeKeysApi(fakeRegistry);
+    const api = makeKeysApi(fakeRegistry, undefined, FakeBC as never);
     await expect(api.activate('')).rejects.toThrow('invalid product key (empty)');
   });
 
   it('rejects with KeyActivationTransportError on timeout when no reply arrives', async () => {
     process.env['SB_KEYS_RELAY_TIMEOUT_MS'] = '40';
     new FakeBC('sb_cmd'); // a peer channel that never replies
-    const api = makeKeysApi(fakeRegistry);
+    const api = makeKeysApi(fakeRegistry, undefined, FakeBC as never);
     await expect(api.activate('X')).rejects.toBeInstanceOf(KeyActivationTransportError);
     delete process.env['SB_KEYS_RELAY_TIMEOUT_MS'];
   });

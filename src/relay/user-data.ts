@@ -1,4 +1,5 @@
 import type { ScopeApi } from '../api/scope';
+import type { RelayPoster } from './channel';
 import { nativeWarn } from '../native-warn';
 import { readPersonaNameSync } from '../steam-internals/app-globals';
 
@@ -123,7 +124,7 @@ export function __resetForTests(): void {
   inflightLanguage = null;
 }
 
-export function installUserChangeListener(scope: ScopeApi, bc: BroadcastChannel): void {
+export function installUserChangeListener(scope: ScopeApi, bc: RelayPoster): void {
   if (listenerActive) return;
 
   const sc = window.SteamClient;
@@ -193,7 +194,7 @@ export function installUserChangeListener(scope: ScopeApi, bc: BroadcastChannel)
 
 /** Handle request-snapshot BC. Re-broadcasts the latest snapshot if any
  *  callback has fired; otherwise silent. Idempotent. */
-export function handleRequestSnapshot(bc: BroadcastChannel): void {
+export function handleRequestSnapshot(bc: RelayPoster): void {
   const snap = buildSnapshotForHandshake();
   if (snap) {
     bc.postMessage({ kind: 'user-snapshot', snapshot: snap });
@@ -218,7 +219,7 @@ interface GetUserAccountSettingsRequest { kind: 'get-user-account-settings'; req
 
 export async function handleGetUserAccountSettings(
   msg: GetUserAccountSettingsRequest,
-  bc: BroadcastChannel,
+  bc: RelayPoster,
 ): Promise<void> {
   if (cachedEmail !== MISS && cachedEmailValidated !== MISS) {
     bc.postMessage({
@@ -255,7 +256,7 @@ export async function handleGetUserAccountSettings(
 }
 
 interface GetUserCountryRequest { kind: 'get-user-country'; requestId: number; }
-export async function handleGetUserCountry(msg: GetUserCountryRequest, bc: BroadcastChannel): Promise<void> {
+export async function handleGetUserCountry(msg: GetUserCountryRequest, bc: RelayPoster): Promise<void> {
   if (cachedIpCountry !== MISS) {
     bc.postMessage({ kind: 'user-country-ok', requestId: msg.requestId, value: cachedIpCountry });
     return;
@@ -282,7 +283,7 @@ export async function handleGetUserCountry(msg: GetUserCountryRequest, bc: Broad
 }
 
 interface GetUserLanguageRequest { kind: 'get-user-language'; requestId: number; }
-export async function handleGetUserLanguage(msg: GetUserLanguageRequest, bc: BroadcastChannel): Promise<void> {
+export async function handleGetUserLanguage(msg: GetUserLanguageRequest, bc: RelayPoster): Promise<void> {
   if (cachedLanguage !== MISS) {
     bc.postMessage({ kind: 'user-language-ok', requestId: msg.requestId, value: cachedLanguage });
     return;

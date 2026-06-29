@@ -21,6 +21,9 @@ export const KNOWN_KINDS: readonly ContextKind[] = ['main', 'shared', 'tabbedBro
 // No leading/trailing hyphens; second char must be alnum (not hyphen).
 export const PLUGIN_ID_REGEX = /^[a-z][a-z0-9](?:[a-z0-9-]{1,38}[a-z0-9])?$/;
 export const SEMVER_REGEX = /^\d+\.\d+\.\d+(?:-[a-z0-9.-]+)?$/;
+// Mirror the C++ kSubscribeTopicRe. Accepts lowercase dotted segments (a-z0-9.-)
+// up to 64 chars total, with an optional trailing .* glob suffix.
+export const SUBSCRIBE_TOPIC_RE = /^[a-z][a-z0-9.\-]{0,63}(\.\*)?$/;
 
 export interface PluginMeta {
   id: string;
@@ -29,6 +32,11 @@ export interface PluginMeta {
   contextKinds: readonly ContextKind[];
   urlPatterns: readonly string[];
   grantedCapabilities: readonly Capability[];
+  /** Foreign bus topics the plugin may subscribe to. Each entry is an exact
+   *  topic string or a `prefix.*` glob. Own-prefix is always allowed.
+   *  Optional — external plugins that don't need cross-plugin subscriptions
+   *  may omit it. */
+  subscribeTopics?: readonly string[];
 }
 
 export type ValidationResult =
@@ -71,6 +79,21 @@ export function validatePluginMeta(value: unknown): ValidationResult {
   for (const c of m.grantedCapabilities) {
     if (typeof c !== 'string' || !KNOWN_CAPS.includes(c as Capability)) {
       return { ok: false, error: `plugin meta: unknown capability: ${JSON.stringify(c)}` };
+    }
+  }
+  // subscribeTopics (optional; grammar mirrored from C++ kSubscribeTopicRe)
+  if (m.subscribeTopics !== undefined) {
+    if (!Array.isArray(m.subscribeTopics)) {
+      return { ok: false, error: 'plugin meta: subscribeTopics must be array' };
+    }
+    for (let i = 0; i < m.subscribeTopics.length; i++) {
+      const t = m.subscribeTopics[i];
+      if (typeof t !== 'string') {
+        return { ok: false, error: 'plugin meta: subscribeTopics entries must be strings' };
+      }
+      if (!SUBSCRIBE_TOPIC_RE.test(t)) {
+        return { ok: false, error: `subscribeTopics[${i}]: invalid topic format: ${t}` };
+      }
     }
   }
   return { ok: true, meta: m as unknown as PluginMeta };

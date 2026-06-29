@@ -1,6 +1,7 @@
 import { encodeRegisterCDKey, decodeRegisterCDKeyResponse } from './register-cdkey-codec';
 import { mapResult } from './keys-result';
 import type { ActivateProductKeyRequest } from './protocol';
+import type { RelayPoster } from './channel';
 import type { ActivateOutcome } from '../api/api-types';
 
 const SEND_TIMEOUT_MS = 30_000; // authoritative bound (real responses < 2 s)
@@ -47,7 +48,7 @@ async function activate(key: string): Promise<ActivateOutcome> {
   return mapResult(decodeRegisterCDKeyResponse(toUint8Array(resp)));
 }
 
-export async function handleActivateProductKey(msg: ActivateProductKeyRequest, bc: BroadcastChannel): Promise<void> {
+export async function handleActivateProductKey(msg: ActivateProductKeyRequest, bc: RelayPoster): Promise<void> {
   try {
     const outcome = await activate(msg.key);
     bc.postMessage({ kind: 'activate-product-key-ok', requestId: msg.requestId, outcome });
