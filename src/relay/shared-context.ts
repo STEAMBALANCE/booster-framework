@@ -29,6 +29,9 @@ import type { SecContext } from '../sec';
 import { createRelayChannel, isTagged, type RelayPoster } from './channel';
 import { handleActivateProductKey } from './key-activation';
 import { handleGetMachineId } from './machine-id';
+import { handleGetOwnedGames } from './owned-games';
+import { handleGetInventory } from './inventory';
+import { handleGetAccountLevel } from './account-level';
 
 /** Splits a `createPluginUi`-prefixed popupId (`<pluginId>__<userId>`) into
  *  its owner and the user-facing key. Returns null for un-prefixed ids
@@ -311,6 +314,15 @@ export function startRelay(scope: ScopeApi, sec?: SecContext): () => void {
         break;
       case 'get-machine-id':
         void handleGetMachineId(msg, poster);
+        break;
+      case 'get-owned-games':
+        void handleGetOwnedGames(msg, poster);
+        break;
+      case 'get-inventory':
+        void handleGetInventory(msg, poster);
+        break;
+      case 'get-account-level':
+        void handleGetAccountLevel(msg, poster);
         break;
       case 'open-window':         winHandlers.handleOpenWindow(msg); break;
       case 'window-show':         winHandlers.handleShow(msg); break;

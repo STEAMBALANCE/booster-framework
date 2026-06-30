@@ -372,6 +372,96 @@ test('getStoreCountry uses store-page g_AccountID when no snapshot (Web context)
   delete (globalThis as Record<string, unknown>)['g_AccountID'];
 });
 
+test('getCurrentUser exposes accountId derived from steamId', async () => {
+  const win = new Window();
+  // @ts-expect-error
+  globalThis.window = win;
+  const fake = new BroadcastChannel(RELAY_CHANNEL);
+  const api = makeSteamApi(createRegistry(), fakeBridge);
+  fake.postMessage({ kind: 'user-snapshot', snapshot: { accountName: 'm', steamId: '76561198094346560' } });
+  await new Promise((r) => setTimeout(r, 5));
+  expect(api.getCurrentUser()!.accountId).toBe(134080832);
+  fake.close();
+});
+test('getCurrentUser accountId is undefined when steamId absent', async () => {
+  const win = new Window();
+  // @ts-expect-error
+  globalThis.window = win;
+  const fake = new BroadcastChannel(RELAY_CHANNEL);
+  const api = makeSteamApi(createRegistry(), fakeBridge);
+  fake.postMessage({ kind: 'user-snapshot', snapshot: { accountName: 'm' } });
+  await new Promise((r) => setTimeout(r, 5));
+  expect(api.getCurrentUser()!.accountId).toBeUndefined();
+  fake.close();
+});
+
+test('getOwnedGames round-trips via the relay', async () => {
+  const win = new Window();
+  // @ts-expect-error
+  globalThis.window = win;
+  const fake = new BroadcastChannel(RELAY_CHANNEL);
+  fake.addEventListener('message', (ev: MessageEvent) => {
+    const m = ev.data as { kind?: string; requestId?: number; includePrices?: boolean } | undefined;
+    if (m?.kind !== 'get-owned-games') return;
+    fake.postMessage({ kind: 'owned-games-ok', requestId: m.requestId,
+      result: { games: [{ appid: 730, name: 'CS2', appType: 1, playtimeForeverMinutes: 0 }], pricesIncluded: !!m.includePrices, ready: true } });
+  });
+  const api = makeSteamApi(createRegistry(), fakeBridge);
+  const r = await api.getOwnedGames();
+  expect(r.ready).toBe(true);
+  expect(r.games[0].appid).toBe(730);
+  fake.close();
+});
+
+test('getOwnedGames resolves a safe default on relay timeout', async () => {
+  const win = new Window();
+  // @ts-expect-error
+  globalThis.window = win;
+  process.env['SB_USER_EXTRA_RELAY_TIMEOUT_MS'] = '30';
+  const api = makeSteamApi(createRegistry(), fakeBridge);
+  const r = await api.getOwnedGames();
+  expect(r).toEqual({ games: [], pricesIncluded: false, ready: false });
+  delete process.env['SB_USER_EXTRA_RELAY_TIMEOUT_MS'];
+});
+
+test('getInventory round-trips via the relay', async () => {
+  const win = new Window();
+  // @ts-expect-error
+  globalThis.window = win;
+  const fake = new BroadcastChannel(RELAY_CHANNEL);
+  fake.addEventListener('message', (ev: MessageEvent) => {
+    const m = ev.data as { kind?: string; requestId?: number } | undefined;
+    if (m?.kind !== 'get-inventory') return;
+    fake.postMessage({ kind: 'inventory-ok', requestId: m.requestId,
+      result: { items: [{ appid: 753, contextid: '6', assetid: 'a1', classid: 'c', instanceid: 'i', amount: 1, marketable: true, tradable: true }], perApp: [{ appid: 753, contextid: '6', fetched: 1, ok: true }], partial: false } });
+  });
+  const api = makeSteamApi(createRegistry(), fakeBridge);
+  const r = await api.getInventory({ apps: [{ appid: 753, contextid: '6' }] });
+  expect(r.items[0].assetid).toBe('a1');
+  expect(r.partial).toBe(false);
+  fake.close();
+});
+
+test('getAccountLevel round-trips via the relay and forwards accountId', async () => {
+  const win = new Window();
+  // @ts-expect-error
+  globalThis.window = win;
+  const fake = new BroadcastChannel(RELAY_CHANNEL);
+  let forwarded: number | undefined = -1;
+  fake.addEventListener('message', (ev: MessageEvent) => {
+    const m = ev.data as { kind?: string; requestId?: number; accountId?: number } | undefined;
+    if (m?.kind !== 'get-account-level') return;
+    forwarded = m.accountId;
+    fake.postMessage({ kind: 'account-level-ok', requestId: m.requestId, level: 10 });
+  });
+  const api = makeSteamApi(createRegistry(), fakeBridge);
+  fake.postMessage({ kind: 'user-snapshot', snapshot: { accountName: 'm', steamId: '76561198094346560' } });
+  await new Promise((r) => setTimeout(r, 5));
+  expect(await api.getAccountLevel()).toBe(10);
+  expect(forwarded).toBe(134080832);
+  fake.close();
+});
+
 test('getStoreCountry resolves undefined (never rejects) if rolled back mid steamId-wait', async () => {
   process.env['SB_STORE_COUNTRY_STEAMID_WAIT_MS'] = '50';
   delete (globalThis as Record<string, unknown>)['g_AccountID'];

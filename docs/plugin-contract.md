@@ -198,7 +198,22 @@ manifest-записи плагина.
 `getMachineId(): Promise<MachineId | undefined>` — hardware-derived SHA1 triple
 `{bb3, ff2, b3b}` от Steam's `Auth.GetMachineID()`; `undefined` при недоступности;
 никогда не throw; значения не логируются. Подробнее —
-[`./steam-api.md`](./steam-api.md#getmachineid-promisemachineid--undefined).
+[`./steam-api.md`](./steam-api.md#getmachineid-promisemachineid--undefined),
+`getOwnedGames(options?): Promise<OwnedGamesResult>` — owned-game library из
+`collectionStore`, опционально обогащённый ценами из `StoreItemCache`; ban-safe,
+никогда не throw; `ready: false` если collectionStore ещё не был заполнен. Подробнее —
+[`./steam-api.md`](./steam-api.md#getownedgamesoptions-promiseownedgamesresult),
+`getInventory(options?): Promise<InventoryResult>` — собственный инвентарь
+пользователя (предметы + market hash names) через аутентифицированный CM
+(`Econ.GetInventoryItemsWithDescriptions`); полный даже при скрытом публичном
+инвентаре; ban-safe; никогда не throw; `partial: true` при сбое или усечении
+какого-либо app. Подробнее —
+[`./steam-api.md`](./steam-api.md#getinventoryoptions-promiseinventoryresult),
+`getAccountLevel(): Promise<number | undefined>` — уровень аккаунта Steam
+(XP/badge level). Добывается relay-side: сначала через CM
+(`Player.GetGameBadgeLevels`), затем miniprofile-fallback; никогда не throw;
+`undefined` при недоступности. Подробнее —
+[`./steam-api.md`](./steam-api.md#getaccountlevel-promisenumber--undefined).
 
 Плагин, которому нужна активация продуктовых ключей Steam, объявляет
 `Capability.Keys` в своём `register` вызове:

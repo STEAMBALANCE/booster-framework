@@ -15,6 +15,9 @@ interface SteamApi {
   onUserChange(cb: (user: SteamUser | null) => void): () => void;
   getStoreCountry(): Promise<string | undefined>;
   getMachineId(): Promise<MachineId | undefined>;
+  getOwnedGames(options?: { includePrices?: boolean }): Promise<OwnedGamesResult>;
+  getInventory(options?: { apps?: AppContext[]; maxItemsPerApp?: number; includeIcons?: boolean }): Promise<InventoryResult>;
+  getAccountLevel(): Promise<number | undefined>;
 }
 ```
 
@@ -185,6 +188,7 @@ interface SteamUser {
   // sync optional (могут отсутствовать в snapshot'е)
   readonly personaName?: string;
   readonly steamId?: string;               // decimal SteamID64
+  readonly accountId?: number;             // 32-bit account id, derived locally from steamId
   readonly currency?: string;              // ISO 4217 derived
   readonly balance?: number;               // numeric, parsed
   readonly balanceFormatted?: string;      // как Steam отображает
@@ -408,6 +412,240 @@ sb.plugins.register({
   },
 });
 ```
+
+## `GamePrice`
+
+Current store price for one app, from `StoreItemCache`. Currency is the
+account wallet currency; all numeric values are in minor units (value ÷ 100 = major units).
+
+```ts
+interface GamePrice {
+  readonly isFree: boolean;
+  readonly unavailable?: boolean;       // delisted / not on store
+  readonly regionRestricted?: boolean;  // unavailable in account region
+  readonly finalMinor?: number;         // current price, minor units
+  readonly originalMinor?: number;      // pre-discount price, minor units
+  readonly discountPct?: number;
+  readonly formattedFinal?: string;     // e.g. "1 300,00₸"
+  readonly formattedOriginal?: string;
+}
+```
+
+Produced by `sb.steam.getOwnedGames()` price enrichment (Task 6). Sourced
+from `StoreItemCache.HintLoadStoreApps` → `IStoreBrowseService/GetItems` —
+the same authenticated call the Steam store UI makes, ban-safe.
+
+- `isFree: true` → `finalMinor` is `0`; `originalMinor`, `discountPct`,
+  `formattedFinal`, `formattedOriginal` are `undefined`.
+- `unavailable: true` → delisted from the store.
+- `regionRestricted: true` → unavailable in the account's region.
+- Absent map entry → app not found in StoreItemCache (unexpected appid or
+  StoreItemCache unavailable).
+
+## `OwnedGame`
+
+Type representing one owned app from `collectionStore`. All time fields are
+unix timestamps in seconds (integer).
+
+```ts
+interface OwnedGame {
+  readonly appid: number;
+  readonly name: string;
+  readonly appType: number;
+  readonly playtimeForeverMinutes: number;
+  readonly playtimeTwoWeeksMinutes?: number;
+  /** Purchase time. NOTE: free-license re-grants (e.g. CS2/HL2) can reset this. */
+  readonly purchasedAt?: number;
+  readonly releaseAt?: number;
+  readonly lastPlayedAt?: number;
+  readonly metacritic?: number;
+  readonly sizeOnDiskBytes?: number;
+  /** Present only when getOwnedGames({includePrices:true}). */
+  readonly price?: GamePrice;
+}
+```
+
+Produced by `sb.steam.getOwnedGames()`. Sourced from the in-memory
+`collectionStore` — no network request.
+
+## `OwnedGamesResult`
+
+```ts
+interface OwnedGamesResult {
+  readonly games: OwnedGame[];
+  readonly pricesIncluded: boolean;
+  /** Account wallet currency (ISO-4217 when derivable). Account-wide. */
+  readonly currency?: string;
+  /** false if collectionStore wasn't populated in time. */
+  readonly ready: boolean;
+}
+```
+
+Returned by `sb.steam.getOwnedGames()`. `currency` is derived from the
+first `GamePrice.formattedFinal` encountered in the library (same mechanism
+as `SteamUser.currency`). `ready: false` means the library wasn't populated
+within the wait window — games array will be empty.
+
+## `getOwnedGames(options?): Promise<OwnedGamesResult>`
+
+Returns the full owned-game library from `collectionStore` with rich metadata.
+Optionally enriches each entry with the current store price (account wallet
+currency) via `StoreItemCache` — the same authenticated `GetItems` call the
+Steam store UI makes, so it is ban-safe and requires no extra network credentials.
+
+```ts
+const r = await ctx.sb.steam.getOwnedGames();
+// r.ready === false → library not yet populated (rare cold-start race)
+for (const g of r.games) {
+  ctx.log.info('game', { appid: g.appid, playtime: g.playtimeForeverMinutes });
+}
+
+// With prices:
+const rp = await ctx.sb.steam.getOwnedGames({ includePrices: true });
+ctx.log.info('library', { count: rp.games.length, currency: rp.currency });
+```
+
+- **Never rejects.** Returns `{ games: [], pricesIncluded, ready: false }` on
+  relay timeout (5 s default).
+- **Ban-safe.** `includePrices` rides `StoreItemCache.HintLoadStoreApps` —
+  the client's own batched `IStoreBrowseService/GetItems`. No extra HTTP
+  calls attributable to the plugin.
+- **`ready: false`** means `collectionStore.allGamesCollection.allApps` was
+  empty after a 3-second bounded wait. Very rare — only on extreme cold start.
+- **`currency`** is derived relay-side from the first available
+  `GamePrice.formattedFinal`; `undefined` if no prices loaded or no currency
+  symbol was recognised.
+- Gated under `Capability.Steam`.
+
+## `AppContext`
+
+One `(appid, contextid)` inventory partition. `contextid` is a **string** —
+Steam context ids can exceed `Number.MAX_SAFE_INTEGER`.
+
+```ts
+interface AppContext {
+  readonly appid: number;
+  readonly contextid: string;
+}
+```
+
+Defaults probed by `getInventory()` when `options.apps` is omitted: CS2
+(`730/2`), Dota 2 (`570/2`), TF2 (`440/2`), Rust (`252490/2`), Steam Community
+items / trading cards (`753/6`).
+
+## `InventoryItem`
+
+One inventory asset merged with its class/instance description. **Slim by
+default** — `iconUrl` is populated only with `{ includeIcons: true }`. Item
+**prices are out of scope** (computed by the backend, not here).
+
+```ts
+interface InventoryItem {
+  readonly appid: number;
+  readonly contextid: string;
+  readonly assetid: string;
+  readonly classid: string;
+  readonly instanceid: string;
+  readonly amount: number;
+  readonly marketHashName?: string;
+  readonly marketName?: string;
+  readonly name?: string;
+  readonly type?: string;
+  readonly marketable: boolean;
+  readonly tradable: boolean;
+  readonly marketFeeApp?: number;
+  readonly iconUrl?: string;        // path/hash fragment, only when includeIcons — NOT a full URL; prepend CDN base to use
+}
+```
+
+All id fields are strings (asset/class/instance ids overflow `number`).
+`marketHashName` is the canonical key for backend price lookups.
+
+## `InventoryAppResult`
+
+Per-`(app, context)` fetch outcome — surfaces partial failures without losing
+the items other apps returned.
+
+```ts
+interface InventoryAppResult {
+  readonly appid: number;
+  readonly contextid: string;
+  readonly totalCount?: number;     // total_inventory_count reported by Steam
+  readonly fetched: number;
+  readonly ok: boolean;
+  readonly error?: string;
+}
+```
+
+`fetched < totalCount` means the app was truncated at `maxItemsPerApp`
+(`ok` still `true`, but `InventoryResult.partial` is set). `ok: false` with an
+`error` string means that app's fetch failed (e.g. `eresult <n>` or an
+exception) — other apps are unaffected.
+
+## `InventoryResult`
+
+```ts
+interface InventoryResult {
+  readonly items: InventoryItem[];
+  readonly perApp: InventoryAppResult[];
+  readonly partial: boolean;        // any app failed OR any app truncated
+}
+```
+
+`items` is the flattened union across every requested app. `partial` is `true`
+if **any** app failed or was truncated at `maxItemsPerApp`. When the inventory
+machinery can't be resolved at all, `items` is empty, every `perApp` entry is
+`ok: false`, and `partial` is `true`.
+
+## `getInventory(options?): Promise<InventoryResult>`
+
+Reads the **logged-in user's own** inventory over the Steam client's
+authenticated CM transport (`Econ.GetInventoryItemsWithDescriptions`). Because
+it rides the client's own session, it is **complete even when the public
+inventory is private** — unlike the public web inventory endpoint. Item
+**prices are out of scope** (the backend computes those from `marketHashName`).
+
+```ts
+const r = await ctx.sb.steam.getInventory();           // default app set, slim items
+for (const it of r.items) {
+  ctx.log.info('item', { app: it.appid, hash: it.marketHashName ?? '<none>', tradable: it.tradable });
+}
+if (r.partial) ctx.log.warn('inventory partial', { perApp: r.perApp.map((a) => ({ app: a.appid, ok: a.ok })) });
+
+// Narrow to specific apps, raise the per-app cap, include icon hashes:
+const cs = await ctx.sb.steam.getInventory({ apps: [{ appid: 730, contextid: '2' }], maxItemsPerApp: 5000, includeIcons: true });
+```
+
+- **Never rejects.** Returns `{ items: [], perApp: [...ok:false...], partial: true }`
+  if the inventory machinery is unavailable, or the safe default on relay timeout.
+- **Ban-safe.** Rides the client's own authenticated CM (the same transport the
+  Steam UI uses) — no extra HTTP attributable to the plugin, no web-API key.
+- **`options.apps`** — defaults to the set above (`AppContext`). Each entry is
+  fetched independently; a failure in one does not abort the others.
+- **`options.maxItemsPerApp`** — default `2000`. Pagination
+  (`more_items`/`last_assetid`, page size 2000) merges across pages until this
+  cap; hitting it sets `partial: true` and that app's `fetched` equals the cap.
+- **`options.includeIcons`** — default `false`; items are slim (no `iconUrl`)
+  unless set, to keep the relay payload small.
+- Gated under `Capability.Steam`.
+
+## `getAccountLevel(): Promise<number | undefined>`
+
+Returns the current user's Steam account level (the XP/badge level shown on
+the Steam profile). Fetched relay-side in two stages: CM first
+(`Player.GetGameBadgeLevels` over `SharedConnection`), miniprofile fallback
+second (`steam-chat.com/miniprofile/<accountId>/json/`).
+
+```ts
+const level = await ctx.sb.steam.getAccountLevel(); // 42 | undefined
+```
+
+- **Never rejects.** Returns `undefined` if both paths are unavailable (no
+  `g_FriendsUIApp`, no `steamAjaxRequest`, relay timeout).
+- `accountId` is derived from the current user snapshot (`SteamUser.accountId`)
+  and forwarded to the relay so the miniprofile fallback targets the right
+  account.
+- Gated under `Capability.Steam`.
 
 ---
 

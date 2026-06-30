@@ -255,6 +255,9 @@ export interface SteamUser {
   readonly personaName?: string;
   /** Decimal SteamID64. */
   readonly steamId?: string;
+  /** 32-bit account id (steamId64 − 76561197960265728). Present whenever steamId
+   *  is. Derived locally (BigInt) from steamId — no relay round-trip. */
+  readonly accountId?: number;
   /** ISO 4217 — derived from balanceFormatted. undefined если баланс пуст. */
   readonly currency?: string;
   /** Numeric balance — parsed из localized строки. */
@@ -299,6 +302,94 @@ export interface SteamUser {
 
 export interface MachineId { bb3: string; ff2: string; b3b: string; }
 
+/** Current store price for one app, from StoreItemCache (account wallet currency,
+ *  minor units = value÷100). Absent fields ⇒ unknown; isFree ⇒ value 0. */
+export interface GamePrice {
+  readonly isFree: boolean;
+  readonly unavailable?: boolean;       // delisted / not on store
+  readonly regionRestricted?: boolean;  // unavailable in account region
+  readonly finalMinor?: number;         // current price, minor units
+  readonly originalMinor?: number;      // pre-discount price, minor units
+  readonly discountPct?: number;
+  readonly formattedFinal?: string;     // "1 300,00₸"
+  readonly formattedOriginal?: string;
+}
+
+/** One owned app from collectionStore (library list). All times are unix seconds. */
+export interface OwnedGame {
+  readonly appid: number;
+  readonly name: string;
+  readonly appType: number;
+  readonly playtimeForeverMinutes: number;
+  readonly playtimeTwoWeeksMinutes?: number;
+  /** Purchase time. NOTE: free-license re-grants (e.g. CS2/HL2) can reset this. */
+  readonly purchasedAt?: number;
+  readonly releaseAt?: number;
+  readonly lastPlayedAt?: number;
+  readonly metacritic?: number;
+  readonly sizeOnDiskBytes?: number;
+  /** Present only when getOwnedGames({includePrices:true}). */
+  readonly price?: GamePrice;
+}
+
+export interface OwnedGamesResult {
+  readonly games: OwnedGame[];
+  readonly pricesIncluded: boolean;
+  /** Account wallet currency (ISO-4217 when derivable). Account-wide. */
+  readonly currency?: string;
+  /** false if collectionStore wasn't populated in time. */
+  readonly ready: boolean;
+}
+
+/** One (app, context) inventory partition, e.g. {appid: 730, contextid: '2'}.
+ *  `contextid` is a string — Steam context ids exceed Number.MAX_SAFE_INTEGER. */
+export interface AppContext {
+  readonly appid: number;
+  readonly contextid: string;
+}
+
+/** One inventory asset, merged with its class/instance description. Slim by
+ *  default — `iconUrl` is populated only when getInventory({includeIcons:true}). */
+export interface InventoryItem {
+  readonly appid: number;
+  readonly contextid: string;
+  readonly assetid: string;
+  readonly classid: string;
+  readonly instanceid: string;
+  readonly amount: number;
+  readonly marketHashName?: string;
+  readonly marketName?: string;
+  readonly name?: string;
+  readonly type?: string;
+  readonly marketable: boolean;
+  readonly tradable: boolean;
+  readonly marketFeeApp?: number;
+  /** Steam economy icon path/hash fragment (relative, NOT a full URL).
+   *  Present only when includeIcons. To construct a usable image URL prepend
+   *  the community CDN base:
+   *  `https://community.cloudflare.steamstatic.com/economy/image/<iconUrl>` */
+  readonly iconUrl?: string;
+}
+
+/** Per-(app, context) fetch outcome — lets callers see partial failures
+ *  without losing the items that did come back from other apps. */
+export interface InventoryAppResult {
+  readonly appid: number;
+  readonly contextid: string;
+  /** total_inventory_count reported by Steam (may exceed `fetched` if truncated). */
+  readonly totalCount?: number;
+  readonly fetched: number;
+  readonly ok: boolean;
+  readonly error?: string;
+}
+
+export interface InventoryResult {
+  readonly items: InventoryItem[];
+  readonly perApp: InventoryAppResult[];
+  /** true if any app failed OR any app was truncated at maxItemsPerApp. */
+  readonly partial: boolean;
+}
+
 export interface SteamApi {
   openUrl(url: string): Promise<void>;
 
@@ -335,6 +426,26 @@ export interface SteamApi {
    *  Returns {bb3, ff2, b3b} or undefined if unavailable. Never rejects.
    *  Gated under Capability.Steam. Values are never logged. */
   getMachineId(): Promise<MachineId | undefined>;
+
+  /** Owned-games library (collectionStore) with rich metadata and, optionally,
+   *  current store prices (account currency) via the client's own GetItems.
+   *  Ban-safe, client-side. Never rejects; ready=false if the library wasn't
+   *  populated. Gated under Capability.Steam. */
+  getOwnedGames(options?: { includePrices?: boolean }): Promise<OwnedGamesResult>;
+
+  /** The logged-in user's own tradable inventory (items + market hash names),
+   *  complete even when the public inventory is private — read over the client's
+   *  authenticated CM (Econ.GetInventoryItemsWithDescriptions). Item PRICES are
+   *  out of scope (backend). Ban-safe, on-demand. Never rejects. Gated under
+   *  Capability.Steam. */
+  getInventory(options?: {
+    apps?: AppContext[]; maxItemsPerApp?: number; includeIcons?: boolean;
+  }): Promise<InventoryResult>;
+
+  /** Steam account XP level — fetched relay-side via CM (Player.GetGameBadgeLevels)
+   *  with a miniprofile fallback. Returns undefined if both paths are unavailable.
+   *  Never rejects. Gated under Capability.Steam. */
+  getAccountLevel(): Promise<number | undefined>;
 }
 
 /** One product granted by a successful key activation. */

@@ -134,6 +134,12 @@ export interface GetUserLanguageRequest        { kind: 'get-user-language';  req
 export interface GetUserLanguageOk             { kind: 'user-language-ok';   requestId: number; value: string | undefined; }
 export interface GetMachineIdRequest { kind: 'get-machine-id'; requestId: number; }
 export interface MachineIdOk { kind: 'machine-id-ok'; requestId: number; value: import('../api/api-types').MachineId | undefined; }
+export interface GetOwnedGamesRequest { kind: 'get-owned-games'; requestId: number; includePrices: boolean; }
+export interface OwnedGamesOk { kind: 'owned-games-ok'; requestId: number; result: import('../api/api-types').OwnedGamesResult; }
+export interface GetInventoryRequest { kind: 'get-inventory'; requestId: number; options: { apps?: import('../api/api-types').AppContext[]; maxItemsPerApp?: number; includeIcons?: boolean }; }
+export interface InventoryOk { kind: 'inventory-ok'; requestId: number; result: import('../api/api-types').InventoryResult; }
+export interface GetAccountLevelRequest { kind: 'get-account-level'; requestId: number; accountId: number | undefined; }
+export interface AccountLevelOk { kind: 'account-level-ok'; requestId: number; level: number | undefined; }
 
 // ─────────── Key activation (one-shot RPC) ───────────
 // Carries only {key} inbound and an already-decoded {outcome} | {error}
@@ -229,7 +235,10 @@ export type MainToShared =
   | WindowCloseRequest
   | WindowBringRequest
   | WindowPostMessageRequest
-  | ActivateProductKeyRequest;
+  | ActivateProductKeyRequest
+  | GetOwnedGamesRequest
+  | GetInventoryRequest
+  | GetAccountLevelRequest;
 
 export type SharedToMain =
   | AttachPopupResponse
@@ -249,7 +258,10 @@ export type SharedToMain =
   | WindowMessageEvent
   | WindowUserCloseEvent
   | ActivateProductKeyOk
-  | ActivateProductKeyError;
+  | ActivateProductKeyError
+  | OwnedGamesOk
+  | InventoryOk
+  | AccountLevelOk;
 
 export type RelayMessage = MainToShared | SharedToMain;
 

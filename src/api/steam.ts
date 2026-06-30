@@ -1,9 +1,9 @@
-import type { SteamApi, SteamUser, MachineId } from './api-types';
+import type { SteamApi, SteamUser, MachineId, OwnedGamesResult, AppContext, InventoryResult } from './api-types';
 import type { Registry } from '../registry';
 import type { Bridge } from '../bridge';
 import { createRelayChannel } from '../relay/channel';
 import { deriveCurrency, parseBalanceNumber } from '../steam-internals/currency-map';
-import { readCurrentSteamId64FromStoreGlobal } from '../steam-internals/steam-id';
+import { readCurrentSteamId64FromStoreGlobal, steamId64ToAccountId } from '../steam-internals/steam-id';
 
 // Window.SteamClient shape is declared in relay/shared-context.ts (merged interface).
 
@@ -124,64 +124,40 @@ export function makeSteamApi(registry: Registry, bridge: Bridge, relaySecret?: s
   // not shared across instances.
   let userExtraNextRequestId = 200_000;
 
-  function callRelayGetAccountSettings(): Promise<{ email?: string; emailValidated?: boolean }> {
-    return new Promise((resolve) => {
+  // Generic relay round-trip: post {kind:reqKind, requestId, ...payload}, await a
+  // {kind:okKind, requestId} reply, resolve pick(reply) or `fallback` on timeout.
+  // Uses the userExtraNextRequestId id-space + a fresh self-removing listener
+  // (NOT the openUrl `pending` map). Never rejects.
+  function callRelay<T>(reqKind: string, payload: object, okKind: string, pick: (m: any) => T, fallback: T): Promise<T> {
+    return new Promise<T>((resolve) => {
       const requestId = userExtraNextRequestId++;
-      const timer = setTimeout(() => { off(); resolve({}); }, getUserExtraTimeoutMs());
+      const timer = setTimeout(() => { off(); resolve(fallback); }, getUserExtraTimeoutMs());
       const off = ch.onMessage((data) => {
-        const m = data as { kind?: string; requestId?: number; email?: string; emailValidated?: boolean } | undefined;
-        if (m?.kind !== 'user-account-settings-ok' || m?.requestId !== requestId) return;
+        const m = data as { kind?: string; requestId?: number } | undefined;
+        if (m?.kind !== okKind || m?.requestId !== requestId) return;
         clearTimeout(timer);
         off();
-        resolve({ email: m.email, emailValidated: m.emailValidated });
+        resolve(pick(m));
       });
-      ch.post({ kind: 'get-user-account-settings', requestId });
+      ch.post({ kind: reqKind, requestId, ...payload });
     });
+  }
+
+  function callRelayGetAccountSettings(): Promise<{ email?: string; emailValidated?: boolean }> {
+    return callRelay<{ email?: string; emailValidated?: boolean }>('get-user-account-settings', {}, 'user-account-settings-ok',
+      (m) => ({ email: m.email, emailValidated: m.emailValidated }), {});
   }
 
   function callRelayGetCountry(): Promise<string | undefined> {
-    return new Promise((resolve) => {
-      const requestId = userExtraNextRequestId++;
-      const timer = setTimeout(() => { off(); resolve(undefined); }, getUserExtraTimeoutMs());
-      const off = ch.onMessage((data) => {
-        const m = data as { kind?: string; requestId?: number; value?: string } | undefined;
-        if (m?.kind !== 'user-country-ok' || m?.requestId !== requestId) return;
-        clearTimeout(timer);
-        off();
-        resolve(m.value);
-      });
-      ch.post({ kind: 'get-user-country', requestId });
-    });
+    return callRelay('get-user-country', {}, 'user-country-ok', (m) => m.value as string | undefined, undefined);
   }
 
   function callRelayGetLanguage(): Promise<string | undefined> {
-    return new Promise((resolve) => {
-      const requestId = userExtraNextRequestId++;
-      const timer = setTimeout(() => { off(); resolve(undefined); }, getUserExtraTimeoutMs());
-      const off = ch.onMessage((data) => {
-        const m = data as { kind?: string; requestId?: number; value?: string } | undefined;
-        if (m?.kind !== 'user-language-ok' || m?.requestId !== requestId) return;
-        clearTimeout(timer);
-        off();
-        resolve(m.value);
-      });
-      ch.post({ kind: 'get-user-language', requestId });
-    });
+    return callRelay('get-user-language', {}, 'user-language-ok', (m) => m.value as string | undefined, undefined);
   }
 
   function callRelayGetMachineId(): Promise<MachineId | undefined> {
-    return new Promise((resolve) => {
-      const requestId = userExtraNextRequestId++;
-      const timer = setTimeout(() => { off(); resolve(undefined); }, getUserExtraTimeoutMs());
-      const off = ch.onMessage((data) => {
-        const m = data as { kind?: string; requestId?: number; value?: MachineId } | undefined;
-        if (m?.kind !== 'machine-id-ok' || m?.requestId !== requestId) return;
-        clearTimeout(timer);
-        off();
-        resolve(m.value);
-      });
-      ch.post({ kind: 'get-machine-id', requestId });
-    });
+    return callRelay('get-machine-id', {}, 'machine-id-ok', (m) => m.value as MachineId | undefined, undefined);
   }
 
   function makeSteamUserFromSnapshot(s: SnapshotPayload): SteamUser {
@@ -209,6 +185,7 @@ export function makeSteamApi(registry: Registry, bridge: Bridge, relaySecret?: s
       accountName:    s.accountName,
       personaName:    s.personaName,
       steamId:        s.steamId,
+      accountId:      steamId64ToAccountId(s.steamId),
       balanceFormatted,
       currency,
       balance,
@@ -373,6 +350,28 @@ export function makeSteamApi(registry: Registry, bridge: Bridge, relaySecret?: s
 
     getMachineId(): Promise<MachineId | undefined> {
       return callRelayGetMachineId();
+    },
+
+    getOwnedGames(options?: { includePrices?: boolean }): Promise<OwnedGamesResult> {
+      return callRelay('get-owned-games', { includePrices: !!options?.includePrices },
+        'owned-games-ok', (m) => m.result as OwnedGamesResult,
+        { games: [], pricesIncluded: !!options?.includePrices, ready: false });
+    },
+
+    getInventory(options?: { apps?: AppContext[]; maxItemsPerApp?: number; includeIcons?: boolean }): Promise<InventoryResult> {
+      // Relay round-trip: the SharedJSContext handler calls fetchInventory over
+      // the authenticated CM and posts back `inventory-ok`. Never rejects —
+      // resolves the empty/partial default on timeout.
+      return callRelay('get-inventory',
+        { options: options ?? {} },
+        'inventory-ok', (m) => m.result as InventoryResult,
+        { items: [], perApp: [], partial: true });
+    },
+
+    getAccountLevel(): Promise<number | undefined> {
+      const accountId = cachedUser?.accountId;
+      return callRelay('get-account-level', { accountId }, 'account-level-ok',
+        (m) => m.level as number | undefined, undefined);
     },
   };
 }

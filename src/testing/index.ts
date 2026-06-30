@@ -119,6 +119,9 @@ export function createTestPluginContext(opts: TestPluginContextOptions = {}): {
     onUserChange: () => () => {},
     getStoreCountry: async () => undefined,
     getMachineId: async () => undefined,
+    getOwnedGames: async () => ({ games: [], pricesIncluded: false, ready: false }),
+    getInventory: async () => ({ items: [], perApp: [], partial: true }),
+    getAccountLevel: async () => undefined,
   };
 
   const mockBus: BusApi = {
