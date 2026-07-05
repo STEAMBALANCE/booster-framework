@@ -215,6 +215,11 @@ manifest-записи плагина.
 `undefined` при недоступности. Подробнее —
 [`./steam-api.md`](./steam-api.md#getaccountlevel-promisenumber--undefined).
 
+`Capability.Ui` открывает `ctx.sb.ui`: `addHeaderButton`, `attachPopup`,
+`openWindow`, `openExternalWindow`, `addMenuItem` (пункт в верхней навигации
+Steam — МАГАЗИН / БИБЛИОТЕКА / …, с навигацией главного окна по клику).
+Полный справочник — [`./ui-api.md`](./ui-api.md).
+
 Плагин, которому нужна активация продуктовых ключей Steam, объявляет
 `Capability.Keys` в своём `register` вызове:
 

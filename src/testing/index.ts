@@ -23,7 +23,7 @@ export interface TestPluginContextOptions {
 }
 
 export interface DomMutation {
-  kind: 'headerButton' | 'popup' | 'window' | 'externalWindow';
+  kind: 'headerButton' | 'popup' | 'window' | 'externalWindow' | 'menuItem';
   details: object;
 }
 
@@ -109,6 +109,10 @@ export function createTestPluginContext(opts: TestPluginContextOptions = {}): {
     async openExternalWindow(o) {
       inspect.domMutations.push({ kind: 'externalWindow', details: o });
       return { id: o.id, setUrl: () => {}, close: () => {}, on: () => () => {} };
+    },
+    async addMenuItem(o) {
+      inspect.domMutations.push({ kind: 'menuItem', details: { ...o, id: `${pluginId}__${o.id}` } });
+      return { remove: () => {} };
     },
   };
 

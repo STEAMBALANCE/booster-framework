@@ -271,15 +271,16 @@ test('filterEligiblePlugins skips on cross-validation failure (version mismatch)
   expect(warnings.some((w) => w.includes('cross-validation failed'))).toBe(true);
 });
 
-test('filterEligiblePlugins keeps plugin only when urlPatterns match', () => {
-  registry.add(makeBundle({ urlPatterns: ['^https://shop\\.example\\.com/'] }));
+test('filterEligiblePlugins keeps plugin only when urlPatterns match (Web context)', () => {
+  // urlPatterns gate URL-bearing contexts; use Web (the store BrowserView).
+  registry.add(makeBundle({ contextKinds: [ContextKind.Web], urlPatterns: ['^https://shop\\.example\\.com/'] }));
   const manifest: PluginsManifestPrefix = {
     injectorVersion: 'test',
-    contextKind: ContextKind.Main,
+    contextKind: ContextKind.Web,
     userDisabledPlugins: [],
     plugins: [{
       id: 'booster-test', version: '1.0.0', apiVersion: 1,
-      contextKinds: [ContextKind.Main],
+      contextKinds: [ContextKind.Web],
       urlPatterns: ['^https://shop\\.example\\.com/'],
       grantedCapabilities: [Capability.Ui],
     }],
@@ -291,6 +292,30 @@ test('filterEligiblePlugins keeps plugin only when urlPatterns match', () => {
   // Match:
   expect(filterEligiblePlugins({
     registry, manifest, currentUrl: 'https://shop.example.com/cart',
+  })).toHaveLength(1);
+});
+
+test('filterEligiblePlugins ignores urlPatterns in Main context (non-URL-bearing)', () => {
+  // A ['web','main'] plugin (e.g. addfunds) must run in Main even though the
+  // client-shell URL matches none of its store patterns.
+  registry.add(makeBundle({
+    contextKinds: [ContextKind.Web, ContextKind.Main],
+    urlPatterns: ['^https://store\\.steampowered\\.com/'],
+  }));
+  const manifest: PluginsManifestPrefix = {
+    injectorVersion: 'test',
+    contextKind: ContextKind.Main,
+    userDisabledPlugins: [],
+    plugins: [{
+      id: 'booster-test', version: '1.0.0', apiVersion: 1,
+      contextKinds: [ContextKind.Web, ContextKind.Main],
+      urlPatterns: ['^https://store\\.steampowered\\.com/'],
+      grantedCapabilities: [Capability.Ui],
+    }],
+  };
+  // Client shell URL matches no store pattern, yet the plugin is eligible in Main.
+  expect(filterEligiblePlugins({
+    registry, manifest, currentUrl: 'about:blank?createflags=274',
   })).toHaveLength(1);
 });
 

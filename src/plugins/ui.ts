@@ -4,6 +4,7 @@ import type {
   AttachedPopupOptions, AttachedPopupHandle,
   OpenWindowOptions, OpenWindowHandle,
   OpenExternalWindowOptions, OpenExternalWindowHandle,
+  MenuItemOptions, MenuItemHandle,
 } from '../api/api-types';
 
 const USER_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
@@ -35,6 +36,9 @@ export function createPluginUi(realUi: UiApi, pluginId: string): UiApi {
       opts: OpenExternalWindowOptions,
     ): Promise<OpenExternalWindowHandle> {
       return await realUi.openExternalWindow({ ...opts, id: prefixId(pluginId, opts.id) });
+    },
+    async addMenuItem(opts: MenuItemOptions): Promise<MenuItemHandle> {
+      return await realUi.addMenuItem({ ...opts, id: prefixId(pluginId, opts.id) });
     },
   });
 }

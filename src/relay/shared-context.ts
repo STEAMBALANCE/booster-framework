@@ -21,6 +21,7 @@ import {
 } from './user-data';
 import { createChromelessPopup } from './popup-factory';
 import { destroyPopup } from './popup-lifecycle';
+import { createMenuItemsManager } from './menu-items';
 import type { SteamPopupParams } from './popup-types';
 import { makeWindowHandlers, type WindowTracking } from './window-handlers';
 import { setupExternalWindowRelay, teardownExternalWindowRelay } from './external-window';
@@ -261,6 +262,10 @@ export function startRelay(scope: ScopeApi, sec?: SecContext): () => void {
   // idTaken can also see open windows (single-namespace: one id at a time).
   const windows = new Map<string, WindowTracking>();
   const winHandlers = makeWindowHandlers({ bc: poster, scope, popups, windows, relaySecret });
+  // Custom top-nav supernav menu items (store / library / community / …).
+  // Injected + kept alive here because the supernav popup DOM is reachable only
+  // from the SharedJSContext (via g_PopupManager). Click navigates the main window.
+  const menuItems = createMenuItemsManager({ post, scope });
   // Set when teardown begins so a microtask-deferred attach (see
   // handleAttachPopup) skips its setup if the relay is being torn down.
   // Without this, an attach in flight at teardown time would create an
@@ -296,6 +301,12 @@ export function startRelay(scope: ScopeApi, sec?: SecContext): () => void {
         break;
       case 'navigate':
         handleNavigate(msg);
+        break;
+      case 'add-menu-item':
+        menuItems.handleAdd(msg);
+        break;
+      case 'remove-menu-item':
+        menuItems.handleRemove(msg);
         break;
       case 'request-snapshot':
         handleRequestSnapshot(poster);
@@ -749,6 +760,9 @@ export function startRelay(scope: ScopeApi, sec?: SecContext): () => void {
       destroyPopup(entry.popup, entry.win);
       popups.delete(id);
     }
+    // Remove injected supernav menu items (+ their observers/styles) while the
+    // scope is still alive, before scope._abort() disconnects observers.
+    try { menuItems.teardown(); } catch { /* swallow */ }
     // Abort scope after popup destroy: Steam-popup loop above is
     // synchronous, but if anything in it did want to read from a
     // scope-tracked resource (it doesn't today, but defense), the

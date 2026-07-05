@@ -110,6 +110,60 @@ export interface NavigateResponse {
   error?: string;
 }
 
+// --- Menu item injection into Steam top-nav supernav popups ---
+// add-menu-item is a one-shot RPC (await added/error); remove-menu-item is
+// fire-and-forget. The item is injected/maintained by the SharedJSContext
+// relay (the only context that reaches the supernav popup DOM via
+// g_PopupManager); click navigates the main window via MWBM.LoadURL.
+
+/** Which top-nav supernav (context-menu popup) to inject into. Resolved to the
+ *  popup's document.title by the relay (MENU_POPUP_TITLE). */
+export type SteamMenuName = 'store' | 'library' | 'community' | 'profile';
+
+/** menuItemId charset — reuses POPUP_ID_RE (identical constraints): safe to
+ *  interpolate into a DOM id, a `<style>` selector, and a BC payload. */
+export const MENU_ITEM_ID_RE = POPUP_ID_RE;
+/** Defense-in-depth caps — label + icon cross realms into the popup DOM. */
+export const MENU_ITEM_LABEL_MAX = 120;
+export const MENU_ITEM_ICON_MAX_BYTES = 16 * 1024;
+
+/** SteamMenuName → the supernav popup's `document.title`. These internal
+ *  titles are English/stable even under a localized Steam (verified via live
+ *  CDP: Russian menu items, English window titles). */
+export const MENU_POPUP_TITLE: Record<SteamMenuName, string> = {
+  store: 'Store Supernav',
+  library: 'Library Supernav',
+  community: 'Community Supernav',
+  profile: 'Profile Supernav',
+};
+
+export interface AddMenuItemRequest {
+  kind: 'add-menu-item';
+  requestId: number;
+  menuItemId: string;
+  menu: SteamMenuName;
+  label: string;
+  /** Inline SVG / data-uri string, innerHTML'd into the item's icon span
+   *  (same trust boundary + detection as HeaderButtonOptions.icon). */
+  iconSvg?: string;
+  /** https URL opened in the MAIN Steam window on click (MWBM.LoadURL). */
+  url: string;
+  variant: 'brand' | 'default';
+  placement: 'top' | 'bottom';
+}
+
+export interface AddMenuItemResponse {
+  kind: 'menu-item-added' | 'menu-item-error';
+  requestId: number;
+  menuItemId: string;
+  error?: string;
+}
+
+export interface RemoveMenuItemRequest {
+  kind: 'remove-menu-item';
+  menuItemId: string;
+}
+
 // ─────────── User-data push protocol ───────────
 
 export interface UserSnapshotEvent {
@@ -224,6 +278,8 @@ export type MainToShared =
   | PopupDestroyRequest
   | PopupPostMessageRequest
   | NavigateRequest
+  | AddMenuItemRequest
+  | RemoveMenuItemRequest
   | RequestSnapshotRequest
   | GetUserAccountSettingsRequest
   | GetUserCountryRequest
@@ -246,6 +302,7 @@ export type SharedToMain =
   | PopupHideEvent
   | PopupShowEvent
   | NavigateResponse
+  | AddMenuItemResponse
   | UserSnapshotEvent
   | GetUserAccountSettingsOk
   | GetUserCountryOk

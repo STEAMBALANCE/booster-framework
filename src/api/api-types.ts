@@ -234,6 +234,47 @@ export interface OpenExternalWindowHandle {
   on(event: 'close', cb: () => void): () => void;
 }
 
+/** Steam desktop-client top-nav dropdown ("supernav") to inject an item into.
+ *  Resolved to the popup's `document.title` by the relay. */
+export type SteamMenu = 'store' | 'library' | 'community' | 'profile';
+
+export interface MenuItemOptions {
+  /** id, [a-zA-Z0-9_-]{1,64}. Auto-prefixed with the plugin id; used as the
+   *  injected DOM id + `<style>` selector + relay routing key. */
+  id: string;
+  /** Which top-nav supernav dropdown to inject into. */
+  menu: SteamMenu;
+  /** Item text. Rendered via textContent. Capped at 120 chars. */
+  label: string;
+  /** Optional inline-SVG / data-uri icon, placed at the RIGHT of the label.
+   *
+   *  Detection: `data:image/...` → `<img src>`; otherwise treated as inline
+   *  SVG. Inline SVG using `fill="currentColor"` inherits the item's text
+   *  colour (so it recolours on hover for free).
+   *
+   *  @security Inserted into the privileged SharedJSContext popup DOM. The
+   *  relay SANITISES it (SVG tag/attribute allowlist; `on*`/script/external
+   *  refs stripped) — unlike HeaderButtonOptions.icon — because Capability.Ui
+   *  is also granted to third-party approved plugins. Still: pass build-time
+   *  constants, not network/user input. */
+  icon?: string;
+  /** https URL opened in the MAIN Steam window on click (via
+   *  MainWindowBrowserManager.LoadURL). Validated https / no-userinfo /
+   *  no-port, length ≤2048. */
+  url: string;
+  /** 'brand' — SteamBalance treatment: idle bg #34A37B33, text+icon #93E0AD;
+   *  hover reverts to the native Steam item look. 'default' (default) — looks
+   *  exactly like a native Steam item, just with the optional icon. */
+  variant?: 'brand' | 'default';
+  /** 'top' (default) inserts at the top of the menu; 'bottom' appends. */
+  placement?: 'top' | 'bottom';
+}
+
+export interface MenuItemHandle {
+  /** Remove the item (and stop maintaining it). Fire-and-forget. */
+  remove(): void;
+}
+
 export interface UiApi {
   addHeaderButton(opts: HeaderButtonOptions): HeaderButtonHandle;
   /** Allocate a native dropdown popup once at startup and toggle it on
@@ -243,6 +284,13 @@ export interface UiApi {
    *  See framework/README.md § sb.ui.openWindow. */
   openWindow(opts: OpenWindowOptions): Promise<OpenWindowHandle>;
   openExternalWindow(opts: OpenExternalWindowOptions): Promise<OpenExternalWindowHandle>;
+  /** Inject a custom item into a Steam desktop-client top-nav dropdown
+   *  (МАГАЗИН / БИБЛИОТЕКА / …). The SharedJSContext relay does the DOM work
+   *  and keeps the item alive across menu open/close and framework re-inject;
+   *  click navigates the main window to `opts.url`. Resolves once the intent
+   *  is registered with the relay (NOT once the DOM node exists — the popup
+   *  may be closed). Requires Capability.Ui. */
+  addMenuItem(opts: MenuItemOptions): Promise<MenuItemHandle>;
 }
 
 export interface SteamUser {

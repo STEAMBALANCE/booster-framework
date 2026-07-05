@@ -30,7 +30,7 @@ export const Capability = {
 
 | Capability   | Gated API           | Чем пользуется плагин                                            |
 |--------------|---------------------|------------------------------------------------------------------|
-| `Ui`         | `ctx.sb.ui`         | `addHeaderButton`, `attachPopup`, `openWindow`, `openExternalWindow`. |
+| `Ui`         | `ctx.sb.ui`         | `addHeaderButton`, `attachPopup`, `openWindow`, `openExternalWindow`, `addMenuItem`. |
 | `Steam`      | `ctx.sb.steam`      | `openUrl`, `getCurrentUser`, `getCurrentUserAsync`, `onUserChange`, `getStoreCountry`. |
 | `Configs`    | `ctx.sb.configs` И `ctx.configs` | Encrypted JSON-storage `read`/`write` по имени, per-plugin namespace. |
 | `Bus`        | `ctx.sb.bus`        | Cross-target pub/sub `publish`/`subscribe`.                      |
@@ -182,6 +182,15 @@ sb.plugins.register({
   },
 });
 ```
+
+> **Расширенная поверхность `Ui`.** `addMenuItem` инжектит DOM в
+> **привилегированный SharedJSContext** (там доступны `SteamClient`,
+> `g_PopupManager`, `MainWindowBrowserManager`) и по клику навигирует главное
+> окно Steam. Поэтому `icon`-SVG **санитайзится** relay'ем (allowlist тегов/
+> атрибутов, вырезание `on*`/script/внешних ссылок), а `url` проходит
+> `isUrlSafeForNavigation` (https-only, без userinfo/порта) на обеих сторонах.
+> Помните об этом, выдавая `Ui` сторонним (`approvedPlugins[]`) плагинам. См.
+> [`./ui-api.md`](./ui-api.md#addmenuitemopts--пункт-в-верхней-навигации-steam).
 
 ### `Steam` — guarded async доступ
 

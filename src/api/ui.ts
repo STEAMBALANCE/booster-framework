@@ -6,6 +6,8 @@ import type {
   AttachedPopupHandle,
   OpenWindowOptions,
   OpenWindowHandle,
+  MenuItemOptions,
+  MenuItemHandle,
 } from './api-types';
 import { createExternalWindowApi } from './external-window';
 import type { Registry } from '../registry';
@@ -13,6 +15,7 @@ import type { Bridge } from '../bridge';
 import { waitForToolbar } from '../steam-internals/header-selectors';
 import {
   POPUP_ID_RE, OPEN_WINDOW_HTML_MAX_BYTES, WINDOW_MESSAGE_MAX_BYTES,
+  MENU_ITEM_ID_RE, MENU_ITEM_LABEL_MAX, MENU_ITEM_ICON_MAX_BYTES,
   type OpenWindowResponse,
   type WindowSetTitleRequest,
 } from '../relay/protocol';
@@ -23,6 +26,9 @@ import { wireTooltip } from './ui-tooltip';
 import { isUrlSafeForNavigation } from './steam';
 
 const ATTACH_TIMEOUT_MS = 5000;
+// Shorter RPC timeout for add-menu-item so a message dropped on a not-yet-ready
+// relay (fresh launch) surfaces fast and the caller's idempotent retry re-posts.
+const MENU_ITEM_ATTACH_TIMEOUT_MS = 1500;
 // Cap our requestId space so it never collides with steam.ts (which starts
 // at STEAM_REQUEST_ID_BASE = 100_000). Process-wide unique IDs would be
 // nicer, but ui+steam are independent module instances and this static cap
@@ -94,7 +100,8 @@ export function makeUiApi(registry: Registry, bridge: Bridge, relaySecret?: stri
     // pending.has returns false).
     if (requestId !== undefined && pending.has(requestId)) {
       if (kind === 'popup-attached' || kind === 'popup-attach-error'
-          || kind === 'window-opened' || kind === 'window-open-error') {
+          || kind === 'window-opened' || kind === 'window-open-error'
+          || kind === 'menu-item-added' || kind === 'menu-item-error') {
         const p = pending.get(requestId)!;
         pending.delete(requestId);
         if (kind === 'popup-attached') p.resolve(msg);
@@ -107,6 +114,11 @@ export function makeUiApi(registry: Registry, bridge: Bridge, relaySecret?: stri
         else if (kind === 'window-opened') p.resolve(msg);
         else if (kind === 'window-open-error') {
           p.reject(new Error(typeof msg['error'] === 'string' ? msg['error'] : 'open-window error'));
+        }
+        // addMenuItem — same shared attachRequest machinery.
+        else if (kind === 'menu-item-added') p.resolve(msg);
+        else if (kind === 'menu-item-error') {
+          p.reject(new Error(typeof msg['error'] === 'string' ? msg['error'] : 'menu-item error'));
         }
       }
     }
@@ -173,7 +185,7 @@ export function makeUiApi(registry: Registry, bridge: Bridge, relaySecret?: stri
   // close-event) via the secret so the relay accepts them.
   const externalWindowApi = createExternalWindowApi({ bcChannel: ch.raw, relaySecret });
 
-  function attachRequest<T>(req: Record<string, unknown>): Promise<T> {
+  function attachRequest<T>(req: Record<string, unknown>, timeoutMs: number = ATTACH_TIMEOUT_MS): Promise<T> {
     if (nextRequestId > UI_REQUEST_ID_MAX) {
       // Hit the cap — would collide with steam.ts's id space (>=100_000)
       // on the same BC channel. Treat as fatal for this attempt; caller
@@ -188,9 +200,9 @@ export function makeUiApi(registry: Registry, bridge: Bridge, relaySecret?: stri
       const timer = setTimeout(() => {
         if (pending.has(requestId)) {
           pending.delete(requestId);
-          reject(new Error(`attachRequest timeout ${ATTACH_TIMEOUT_MS}ms`));
+          reject(new Error(`attachRequest timeout ${timeoutMs}ms`));
         }
-      }, ATTACH_TIMEOUT_MS);
+      }, timeoutMs);
       pending.set(requestId, {
         resolve: (v: unknown) => {
           clearTimeout(timer);
@@ -663,5 +675,65 @@ export function makeUiApi(registry: Registry, bridge: Bridge, relaySecret?: stri
     },
 
     openExternalWindow: externalWindowApi.openExternalWindow,
+
+    async addMenuItem(opts: MenuItemOptions): Promise<MenuItemHandle> {
+      // ── Sync validation (throws BEFORE posting). Relay re-validates
+      // (defense in depth: an in-process actor bypassing the framework still
+      // hits relay checks). ──
+      if (!MENU_ITEM_ID_RE.test(opts.id)) {
+        throw new Error(`addMenuItem: invalid id "${opts.id}" (allowed: [a-zA-Z0-9_-]{1,64})`);
+      }
+      if (typeof opts.label !== 'string' || opts.label.length === 0
+          || opts.label.length > MENU_ITEM_LABEL_MAX) {
+        throw new Error(`addMenuItem: label must be 1..${MENU_ITEM_LABEL_MAX} chars`);
+      }
+      if (opts.menu !== 'store' && opts.menu !== 'library'
+          && opts.menu !== 'community' && opts.menu !== 'profile') {
+        throw new Error(`addMenuItem: invalid menu "${opts.menu}"`);
+      }
+      if (typeof opts.url !== 'string' || opts.url.length > 2048
+          || !isUrlSafeForNavigation(opts.url)) {
+        throw new Error('addMenuItem: url failed safety check (https, no userinfo/port, ≤2048)');
+      }
+      if (opts.icon !== undefined
+          && (typeof opts.icon !== 'string' || opts.icon.length > MENU_ITEM_ICON_MAX_BYTES)) {
+        throw new Error(`addMenuItem: icon too large (>${MENU_ITEM_ICON_MAX_BYTES} bytes)`);
+      }
+
+      // Register the registry undo BEFORE awaiting so a framework rollback
+      // during the roundtrip still tells the relay to drop the item.
+      const undoId = registry.push({
+        description: `menu-item:${opts.id}`,
+        undo: () => {
+          try { ch.post({ kind: 'remove-menu-item', menuItemId: opts.id }); } catch { /* */ }
+        },
+      });
+      try {
+        // Shorter timeout than attachPopup/openWindow: a dropped message on a
+        // cold relay should surface fast so the caller's retry (installAddFundsMain)
+        // re-posts within ~2s instead of ~5s. add-menu-item is idempotent, so a
+        // spurious retry is harmless.
+        await attachRequest<{ kind: 'menu-item-added'; menuItemId: string }>({
+          kind: 'add-menu-item',
+          menuItemId: opts.id,
+          menu: opts.menu,
+          label: opts.label,
+          iconSvg: opts.icon,
+          url: opts.url,
+          variant: opts.variant ?? 'default',
+          placement: opts.placement ?? 'top',
+        }, MENU_ITEM_ATTACH_TIMEOUT_MS);
+      } catch (e) {
+        registry.remove(undoId);
+        throw e;
+      }
+
+      return {
+        remove(): void {
+          ch.post({ kind: 'remove-menu-item', menuItemId: opts.id });
+          registry.remove(undoId);
+        },
+      };
+    },
   };
 }

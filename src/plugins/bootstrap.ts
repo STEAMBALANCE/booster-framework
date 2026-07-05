@@ -8,8 +8,8 @@
 
 import {
   Capability,
+  ContextKind,
   SUPPORTED_API_VERSIONS,
-  type ContextKind,
   type PluginManifest,
   type PluginContext,
   type SbApi,
@@ -118,7 +118,15 @@ export function filterEligiblePlugins(args: {
       log.warn(`plugin '${authoritativeId}' cross-validation failed: ${v.reason}`);
       continue;
     }
-    if (bundle.urlPatterns && bundle.urlPatterns.length > 0) {
+    // urlPatterns only meaningfully gate URL-bearing contexts (Web / tabbed
+    // browser). In Main / Shared the "URL" is the client shell
+    // (about:blank?createflags=274…), which no store pattern matches — so a
+    // ['web','main'] plugin (e.g. addfunds' Main install for the store-menu
+    // item) would be wrongly filtered out of Main. Skip the gate there; the
+    // contextKind check above already scoped the plugin to Main.
+    const urlBearingKind =
+      currentKind === ContextKind.Web || currentKind === ContextKind.TabbedBrowser;
+    if (urlBearingKind && bundle.urlPatterns && bundle.urlPatterns.length > 0) {
       // Bundle's urlPatterns were already cross-validated as a subset of
       // manifest's, so we can match against bundle's patterns directly.
       let matched = false;

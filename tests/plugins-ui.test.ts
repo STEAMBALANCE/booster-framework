@@ -1,12 +1,13 @@
 import { test, expect } from 'bun:test';
 import { createPluginUi } from '../src/plugins/ui';
-import type { UiApi, HeaderButtonOptions, AttachedPopupOptions, OpenWindowOptions, OpenExternalWindowOptions } from '../src/api/api-types';
+import type { UiApi, HeaderButtonOptions, AttachedPopupOptions, OpenWindowOptions, OpenExternalWindowOptions, MenuItemOptions } from '../src/api/api-types';
 
 interface CapturedCalls {
   headerButton?: HeaderButtonOptions;
   popup?: AttachedPopupOptions;
   window?: OpenWindowOptions;
   externalWindow?: OpenExternalWindowOptions;
+  menuItem?: MenuItemOptions;
 }
 
 function makeMockUi(captured: CapturedCalls): UiApi {
@@ -15,6 +16,7 @@ function makeMockUi(captured: CapturedCalls): UiApi {
     attachPopup: async (o) => { captured.popup = o; return {} as never; },
     openWindow: async (o) => { captured.window = o; return {} as never; },
     openExternalWindow: async (o) => { captured.externalWindow = o; return {} as never; },
+    addMenuItem: async (o) => { captured.menuItem = o; return { remove: () => {} }; },
   };
 }
 
@@ -44,6 +46,14 @@ test('openExternalWindow auto-prefixes id', async () => {
   const wrapped = createPluginUi(makeMockUi(captured), 'booster-checkout');
   await wrapped.openExternalWindow({ id: 'ext1', url: 'about:blank' } as OpenExternalWindowOptions);
   expect(captured.externalWindow?.id).toBe('booster-checkout__ext1');
+});
+
+test('addMenuItem auto-prefixes id', async () => {
+  const captured: CapturedCalls = {};
+  const wrapped = createPluginUi(makeMockUi(captured), 'booster-addfunds');
+  await wrapped.addMenuItem({ id: 'booster-catalog', menu: 'store', label: 'Catalog', url: 'https://example.com/x' });
+  expect(captured.menuItem?.id).toBe('booster-addfunds__booster-catalog');
+  expect(captured.menuItem?.menu).toBe('store');
 });
 
 test('invalid user id is rejected (path-traversal characters)', () => {

@@ -331,6 +331,57 @@ test('attachPopup rejects invalid id', async () => {
   })).rejects.toThrow(/invalid id/);
 });
 
+test('addMenuItem posts add-menu-item, resolves on menu-item-added, remove posts remove-menu-item', async () => {
+  const { RELAY_CHANNEL } = await import('../src/relay/protocol');
+  const { createRegistry } = await import('../src/registry');
+  const { makeUiApi } = await import('../src/api/ui');
+
+  const reg = createRegistry();
+  const ui = makeUiApi(reg, { call: async () => ({}) } as never);
+
+  const fakeRelay = new BroadcastChannel(RELAY_CHANNEL);
+  const seen: Array<Record<string, unknown>> = [];
+  fakeRelay.addEventListener('message', (e: MessageEvent) => {
+    const m = e.data as Record<string, unknown>;
+    seen.push(m);
+    if (m['kind'] === 'add-menu-item') {
+      fakeRelay.postMessage({ kind: 'menu-item-added', requestId: m['requestId'], menuItemId: m['menuItemId'] });
+    }
+  });
+
+  const handle = await ui.addMenuItem({
+    id: 'booster-catalog', menu: 'store', label: 'Catalog',
+    url: 'https://example.com/catalog', variant: 'brand', placement: 'top',
+  });
+  const addMsg = seen.find((m) => m.kind === 'add-menu-item');
+  expect(addMsg).toBeDefined();
+  expect(addMsg?.['menu']).toBe('store');
+  expect(addMsg?.['variant']).toBe('brand');
+
+  handle.remove();
+  await new Promise((r) => setTimeout(r, 10));
+  expect(seen.some((m) => m.kind === 'remove-menu-item' && m.menuItemId === 'booster-catalog')).toBe(true);
+  fakeRelay.close();
+});
+
+test('addMenuItem rejects a non-https url synchronously', async () => {
+  const { createRegistry } = await import('../src/registry');
+  const { makeUiApi } = await import('../src/api/ui');
+  const ui = makeUiApi(createRegistry(), { call: async () => ({}) } as never);
+  await expect(ui.addMenuItem({
+    id: 'x', menu: 'store', label: 'X', url: 'http://insecure.example/x',
+  })).rejects.toThrow(/safety check/);
+});
+
+test('addMenuItem rejects an invalid menu name synchronously', async () => {
+  const { createRegistry } = await import('../src/registry');
+  const { makeUiApi } = await import('../src/api/ui');
+  const ui = makeUiApi(createRegistry(), { call: async () => ({}) } as never);
+  // @ts-expect-error deliberately invalid menu
+  await expect(ui.addMenuItem({ id: 'x', menu: 'nope', label: 'X', url: 'https://e.example/x' }))
+    .rejects.toThrow(/invalid menu/);
+});
+
 // ── Placement edge cases (Flow 1.12) ─────────────────────────────────────────
 //
 // These tests pin the full if/else chain in addHeaderButton

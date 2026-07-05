@@ -13,6 +13,7 @@ interface UiApi {
   attachPopup(opts: AttachedPopupOptions): Promise<AttachedPopupHandle>;
   openWindow(opts: OpenWindowOptions): Promise<OpenWindowHandle>;
   openExternalWindow(opts: OpenExternalWindowOptions): Promise<OpenExternalWindowHandle>;
+  addMenuItem(opts: MenuItemOptions): Promise<MenuItemHandle>;
 }
 ```
 
@@ -371,6 +372,73 @@ sb.plugins.register({
 
     const offClose = win.on('close', () => ctx.log.info('checkout window closed'));
     return () => { offClose(); win.close(); };
+  },
+});
+```
+
+## `addMenuItem(opts)` — пункт в верхней навигации Steam
+
+Вставляет собственный пункт в один из top-nav dropdown'ов десктоп-клиента
+Steam (МАГАЗИН / БИБЛИОТЕКА / СООБЩЕСТВО / профиль). Эти dropdown'ы —
+context-menu popup'ы, живущие в SharedJSContext (`g_PopupManager`), поэтому
+DOM-работу выполняет relay: `addMenuItem` только передаёт намерение, а relay
+инжектит пункт, удерживает его живым через open/close меню и re-injection
+фреймворка, и по клику навигирует **главное окно** Steam на `opts.url`
+(`MainWindowBrowserManager.LoadURL`).
+
+Вызывать из контекста с bridge/relay — обычно `ContextKind.Main` (шелл
+клиента живёт всю сессию, поэтому пункт присутствует всегда, независимо от
+открытой страницы).
+
+### `MenuItemOptions`
+
+| Поле         | Тип                                | Default   | Описание |
+|--------------|------------------------------------|-----------|----------|
+| `id`         | `string`                           | —         | `[a-zA-Z0-9_-]{1,64}`. Авто-префиксуется `<pluginId>__`; служит DOM-id, `<style>`-селектором и ключом маршрутизации. |
+| `menu`       | `'store' \| 'library' \| 'community' \| 'profile'` | — | Целевой supernav-dropdown. |
+| `label`      | `string`                           | —         | Текст пункта (через `textContent`). ≤ 120 символов. |
+| `icon?`      | `string`                           | —         | Inline-SVG или `data:image/*`. Ставится справа от текста. SVG с `fill="currentColor"` наследует цвет текста (перекрашивается на hover). **Санитайзится relay'ем** (allowlist тегов/атрибутов SVG; `on*`/script/внешние ссылки вырезаются) — в отличие от `HeaderButtonOptions.icon`, т.к. инжект идёт в привилегированный SharedJSContext. |
+| `url`        | `string`                           | —         | https-only, без userinfo/порта, ≤ 2048. Открывается в главном окне Steam по клику. |
+| `variant?`   | `'brand' \| 'default'`             | `'default'` | `'brand'` — фирменная подача SteamBalance (idle-фон `#34A37B33`, текст+иконка `#93E0AD`; hover возвращает нативный вид пункта Steam). `'default'` — как обычный пункт Steam. |
+| `placement?` | `'top' \| 'bottom'`                | `'top'`   | Позиция в списке меню. |
+
+### `MenuItemHandle`
+
+```ts
+interface MenuItemHandle {
+  remove(): void;   // убрать пункт; fire-and-forget
+}
+```
+
+- `addMenuItem` **резолвится когда relay зарегистрировал намерение**, а не
+  когда DOM-узел создан (меню может быть закрыто в момент вызова).
+- Пункт снимается автоматически на `lifecycle.rollbackAll()` (registry
+  undo). Явный `handle.remove()` нужен только для досрочного удаления.
+
+### Пример: пункт «Каталог игр» в меню МАГАЗИН
+
+```ts
+import { ContextKind, Capability, type PluginContext } from '@steambalance/booster-framework';
+declare const sb: { plugins: { register: (m: unknown) => void } };
+
+sb.plugins.register({
+  id: 'demo-menu',
+  version: '0.0.1',
+  apiVersion: 1,
+  displayName: 'Menu item demo',
+  contextKinds: [ContextKind.Main],
+  capabilities: [Capability.Ui],
+  async init(ctx: PluginContext): Promise<() => void> {
+    const item = await ctx.sb.ui.addMenuItem({
+      id: 'catalog',
+      menu: 'store',
+      label: 'Каталог игр',
+      icon: '<svg viewBox="0 0 14 12"><path fill="currentColor" d="…"/></svg>',
+      url: 'https://example.com/catalog',
+      variant: 'brand',
+      placement: 'top',
+    });
+    return () => item.remove();
   },
 });
 ```
