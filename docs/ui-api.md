@@ -14,6 +14,7 @@ interface UiApi {
   openWindow(opts: OpenWindowOptions): Promise<OpenWindowHandle>;
   openExternalWindow(opts: OpenExternalWindowOptions): Promise<OpenExternalWindowHandle>;
   addMenuItem(opts: MenuItemOptions): Promise<MenuItemHandle>;
+  addStoreNavButton(opts: StoreNavButtonOptions): StoreNavButtonHandle;
 }
 ```
 
@@ -439,6 +440,113 @@ sb.plugins.register({
       placement: 'top',
     });
     return () => item.remove();
+  },
+});
+```
+
+## `addStoreNavButton(opts)` — кнопка в верхнем таб-баре магазина Steam
+
+Вставляет постоянную кнопку в строку табов магазина Steam-клиента
+(«Просмотр / Рекомендации / Категории / …» — ряд под поиском). В отличие
+от `addMenuItem` (SharedJSContext + relay), работает напрямую в DOM
+`ContextKind.Web`-страницы, без relay round-trip — поэтому
+`addStoreNavButton` **синхронный**: возвращает handle сразу, а не
+`Promise`, как `addHeaderButton`.
+
+**Где доступно.** Только `ContextKind.Web` (сама страница магазина).
+Регистрируйте плагин с `contextKinds: [ContextKind.Web]`.
+
+### `StoreNavButtonOptions`
+
+| Поле         | Тип                    | Default    | Описание |
+|--------------|------------------------|------------|----------|
+| `id`         | `string`               | —          | `[a-zA-Z0-9_-]{1,64}` (тот же `MENU_ITEM_ID_RE`, что у `addMenuItem`). DOM-id кнопки; также ключ CSS-селектора `[data-booster-storenav-btn]`. |
+| `label`      | `string`               | —          | Текст кнопки через `textContent`. 1..120 символов. |
+| `icon?`      | `string`               | —          | Inline-SVG или `data:image/*`, рендерится после текста. SVG **санитайзится** (allowlist тегов/атрибутов) — страница магазина полу-привилегированное origin, а `Capability.Ui` доступен сторонним (`approvedPlugins[]`) плагинам, в отличие от `HeaderButtonOptions.icon`. `data:image/*` идёт в `<img>` без санитайзинга. Cap 16 КБ. |
+| `url`        | `string`               | —          | https-only, без userinfo/порта, ≤2048 символов (`isUrlSafeForNavigation`). Цель клика. |
+| `variant?`   | `'default' \| 'brand'` | **`'brand'`** | Фирменный зелёный pill (`#34a37b`, 32px, uppercase). Единственный из `sb.ui`-методов, где `'brand'` — default, а не opt-in. |
+| `placement?` | `'start' \| 'end'`     | `'start'`  | `'start'` — перед первой вкладкой («Просмотр»); `'end'` — после последней. |
+
+### `StoreNavButtonHandle`
+
+```ts
+interface StoreNavButtonHandle {
+  remove(): void;
+  setLabel(s: string): void;
+}
+```
+
+- `remove()` останавливает reconcile-loop, отключает `MutationObserver`
+  и убирает кнопку из DOM. Также срабатывает автоматически на
+  `lifecycle.rollbackAll()`.
+- `setLabel(s)` меняет `textContent` лейбла на месте, без пересоздания
+  кнопки.
+
+### Durability: структурный якорь, а не CSS-класс
+
+Хэш-класс строки табов меняется при пересборках Steam, а сама строка
+перерисовывается React'ом (табы схлопываются в «Прочее» на узких
+viewport'ах) — полагаться на класс, текст или геометрию нельзя.
+`addStoreNavButton` поэтому ищет строку **структурно**: берёт все
+`button[aria-expanded]`, содержащие caret `<svg>`, группирует их по
+общему родителю и выбирает группу с наибольшим числом таких кнопок
+(тайбрейк — группа, где все кнопки имеют один и тот же `className`). См.
+`src/steam-internals/store-nav-selectors.ts::findStoreNav`.
+
+Найдя строку, `addStoreNavButton` держит кнопку живой через два
+параллельных механизма:
+
+- **Reconcile-poll** — `reconcile()` вызывается сразу (instant mount,
+  если строка уже в DOM на момент вызова), затем каждые **800мс** через
+  `setInterval`.
+- **`MutationObserver`** на `childList` найденной строки — ловит
+  React-перерисовку мгновенно, не дожидаясь следующего тика poll'а.
+
+Оба механизма делают одно и то же: если `row.contains(button)` стало
+`false` (Steam выбросил узел при ре-рендере), кнопка вставляется заново
+на позицию `placement`.
+
+### Навигация: `location.assign`, а не `MainWindowBrowserManager`
+
+По клику `addStoreNavButton` вызывает `window.location.assign(opts.url)`
+в текущей вкладке магазина — **не** `MainWindowBrowserManager.LoadURL`,
+как `addMenuItem`. Причина: `addMenuItem` инжектится relay'ем в
+привилегированный `SharedJSContext`, откуда `MainWindowBrowserManager`
+доступен; `addStoreNavButton` же выполняется прямо в самой странице
+магазина (`ContextKind.Web`), у которой нет моста к этому объекту —
+единственный доступный способ навигации отсюда — обычный
+`location.assign` в той же вкладке.
+
+### Capability и валидация
+
+Требует `Capability.Ui` — без гранта `ctx.sb.ui === undefined` (см.
+[`./capabilities.md`](./capabilities.md)). `addStoreNavButton` бросает
+**синхронно**, до касания DOM: на невалидный `id`, на пустой или
+слишком длинный `label`, на слишком большой `icon`, на небезопасный
+`url`.
+
+### Пример: кнопка «Каталог игр» в магазине
+
+```ts
+import { ContextKind, Capability, type PluginContext } from '@steambalance/booster-framework';
+declare const sb: { plugins: { register: (m: unknown) => void } };
+
+sb.plugins.register({
+  id: 'demo-storenav',
+  version: '0.0.1',
+  apiVersion: 1,
+  displayName: 'Store nav button demo',
+  contextKinds: [ContextKind.Web],
+  capabilities: [Capability.Ui],
+  init(ctx: PluginContext): () => void {
+    const btn = ctx.sb.ui.addStoreNavButton({
+      id: 'catalog',
+      label: 'Каталог игр',
+      icon: '<svg viewBox="0 0 14 12"><path fill="currentColor" d="…"/></svg>',
+      url: 'https://example.com/catalog',
+      placement: 'start',
+    });
+    return () => btn.remove();
   },
 });
 ```

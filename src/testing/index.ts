@@ -23,7 +23,7 @@ export interface TestPluginContextOptions {
 }
 
 export interface DomMutation {
-  kind: 'headerButton' | 'popup' | 'window' | 'externalWindow' | 'menuItem';
+  kind: 'headerButton' | 'popup' | 'window' | 'externalWindow' | 'menuItem' | 'storeNavButton';
   details: object;
 }
 
@@ -113,6 +113,10 @@ export function createTestPluginContext(opts: TestPluginContextOptions = {}): {
     async addMenuItem(o) {
       inspect.domMutations.push({ kind: 'menuItem', details: { ...o, id: `${pluginId}__${o.id}` } });
       return { remove: () => {} };
+    },
+    addStoreNavButton(o) {
+      inspect.domMutations.push({ kind: 'storeNavButton', details: { ...o, id: `${pluginId}__${o.id}` } });
+      return { remove: () => {}, setLabel: () => {} };
     },
   };
 

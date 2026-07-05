@@ -275,6 +275,36 @@ export interface MenuItemHandle {
   remove(): void;
 }
 
+export interface StoreNavButtonOptions {
+  /** DOM id AND the [data-booster-storenav-btn] style anchor. Charset
+   *  MENU_ITEM_ID_RE ([a-zA-Z0-9_-]{1,64}); validated (throws) because it is
+   *  used inside a CSS attribute selector. */
+  id: string;
+  /** Item text. Rendered via textContent. Capped at 120 chars. */
+  label: string;
+  /** Optional inline SVG string or data:image/* URI, rendered after the label.
+   *  SVG is SANITISED (allowlist tags/attrs) — the store page is a
+   *  semi-privileged origin and Capability.Ui is reachable by third-party
+   *  approved plugins (unlike addHeaderButton, which trusts the plugin in the
+   *  main shell). data:image/* → <img>. Capped at 16 KB. */
+  icon?: string;
+  /** Navigation target. Must pass isUrlSafeForNavigation (https, no
+   *  userinfo/port, ≤2048) — validated (throws). Click → location.assign in
+   *  the current store tab (MainWindowBrowserManager is unreachable from the
+   *  store realm). */
+  url: string;
+  /** Visual variant. Default 'brand' (SteamBalance green pill). */
+  variant?: 'default' | 'brand';
+  /** 'start' (default) = before the first tab («Просмотр»); 'end' = after the
+   *  last tab. */
+  placement?: 'start' | 'end';
+}
+
+export interface StoreNavButtonHandle {
+  remove(): void;
+  setLabel(s: string): void;
+}
+
 export interface UiApi {
   addHeaderButton(opts: HeaderButtonOptions): HeaderButtonHandle;
   /** Allocate a native dropdown popup once at startup and toggle it on
@@ -291,6 +321,11 @@ export interface UiApi {
    *  is registered with the relay (NOT once the DOM node exists — the popup
    *  may be closed). Requires Capability.Ui. */
   addMenuItem(opts: MenuItemOptions): Promise<MenuItemHandle>;
+  /** Inject a persistent button into the Steam store top-nav bar (the row of
+   *  «Просмотр / Рекомендации / Категории …» tabs). Web context only; survives
+   *  React re-renders + Steam rebuilds via a structural anchor + reconcile.
+   *  Throws synchronously on invalid id, label, icon, or url. */
+  addStoreNavButton(opts: StoreNavButtonOptions): StoreNavButtonHandle;
 }
 
 export interface SteamUser {

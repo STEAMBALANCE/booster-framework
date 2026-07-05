@@ -17,6 +17,7 @@
 import { nativeWarn } from '../native-warn';
 import type { ScopeApi } from '../api/scope';
 import { isUrlSafeForNavigation } from '../api/steam';
+import { sanitizeIconSvg } from '../api/svg-sanitize';
 import {
   MENU_ITEM_ID_RE, MENU_ITEM_LABEL_MAX, MENU_ITEM_ICON_MAX_BYTES,
   MENU_POPUP_TITLE,
@@ -37,24 +38,6 @@ const STEAM_HOVER_FG = '#3D4450';
 // durability guarantee that survives popup destroy/recreate and any React
 // re-render the per-popup observer misses.
 const RECONCILE_MS = 800;
-
-const SVG_NS = 'http://www.w3.org/2000/svg';
-
-// Conservative SVG allowlist — enough for flat icon marks, nothing scriptable.
-// Ref-based tags (defs/gradients/clipPath/mask/symbol/use) are deliberately
-// excluded: their only use is url(#id) references, which the value filter
-// strips anyway, so they'd be dead weight that only widens the attack surface.
-const SVG_ALLOWED_TAGS = new Set([
-  'svg', 'g', 'path', 'circle', 'ellipse', 'rect', 'line', 'polyline',
-  'polygon', 'title', 'desc',
-]);
-const SVG_ALLOWED_ATTRS = new Set([
-  'd', 'fill', 'stroke', 'stroke-width', 'stroke-linecap', 'stroke-linejoin',
-  'stroke-miterlimit', 'stroke-dasharray', 'fill-rule', 'clip-rule',
-  'viewbox', 'width', 'height', 'cx', 'cy', 'r', 'rx', 'ry', 'x', 'y',
-  'x1', 'y1', 'x2', 'y2', 'points', 'transform', 'opacity', 'fill-opacity',
-  'stroke-opacity', 'aria-hidden', 'xmlns', 'preserveaspectratio',
-]);
 
 interface SteamPopupInstance { m_popup?: { document?: Document } | null }
 interface PopupManager { m_mapPopups?: Map<string, SteamPopupInstance> }
@@ -116,35 +99,6 @@ export function createMenuItemsManager(deps: {
     return anyItem ? anyItem.parentElement : null;
   }
 
-  // ── icon sanitisation ──
-  function sanitizeSvg(svg: string, doc: Document): Element | null {
-    let parsed: Document;
-    try { parsed = new DOMParser().parseFromString(svg, 'image/svg+xml'); }
-    catch { return null; }
-    const root = parsed.documentElement;
-    if (!root || root.tagName.toLowerCase() !== 'svg') return null;
-    if (parsed.getElementsByTagName('parsererror').length > 0) return null;
-
-    const clean = (src: Element): Element | null => {
-      const tag = src.tagName.toLowerCase();
-      if (!SVG_ALLOWED_TAGS.has(tag)) return null;
-      const el = doc.createElementNS(SVG_NS, tag);
-      for (const attr of Array.from(src.attributes)) {
-        const name = attr.name.toLowerCase();
-        if (name.startsWith('on')) continue;
-        if (!SVG_ALLOWED_ATTRS.has(name)) continue;
-        if (/url\(|javascript:|expression\(/i.test(attr.value)) continue;
-        el.setAttribute(attr.name, attr.value);
-      }
-      for (const child of Array.from(src.children)) {
-        const c = clean(child);
-        if (c) el.appendChild(c);
-      }
-      return el;
-    };
-    return clean(root);
-  }
-
   function appendIcon(span: HTMLElement, icon: string, doc: Document): void {
     if (/^data:image\//i.test(icon)) {
       const img = doc.createElement('img');
@@ -156,7 +110,7 @@ export function createMenuItemsManager(deps: {
       span.appendChild(img);
       return;
     }
-    const svg = sanitizeSvg(icon, doc);
+    const svg = sanitizeIconSvg(icon, doc);
     if (svg) span.appendChild(svg);
     // else: icon rejected by the sanitiser — item still renders label-only.
   }

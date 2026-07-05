@@ -8,11 +8,14 @@ import type {
   OpenWindowHandle,
   MenuItemOptions,
   MenuItemHandle,
+  StoreNavButtonOptions,
+  StoreNavButtonHandle,
 } from './api-types';
 import { createExternalWindowApi } from './external-window';
 import type { Registry } from '../registry';
 import type { Bridge } from '../bridge';
 import { waitForToolbar } from '../steam-internals/header-selectors';
+import { findStoreNav } from '../steam-internals/store-nav-selectors';
 import {
   POPUP_ID_RE, OPEN_WINDOW_HTML_MAX_BYTES, WINDOW_MESSAGE_MAX_BYTES,
   MENU_ITEM_ID_RE, MENU_ITEM_LABEL_MAX, MENU_ITEM_ICON_MAX_BYTES,
@@ -22,10 +25,17 @@ import {
 import { createRelayChannel, isTagged, stripTag } from '../relay/channel';
 import { nativeWarn } from '../native-warn';
 import { ensureToolbarStyles } from './ui-toolbar-styles';
+import { ensureStoreNavStyles } from './ui-storenav-styles';
 import { wireTooltip } from './ui-tooltip';
 import { isUrlSafeForNavigation } from './steam';
+import { sanitizeIconSvg } from './svg-sanitize';
 
 const ATTACH_TIMEOUT_MS = 5000;
+// Poll interval for the store-nav button's reconcile loop (re-mount after a
+// React-driven wipe of the row). Mirrors the MutationObserver but also
+// covers the case where `row` itself was replaced wholesale (a fresh row
+// element the observer isn't attached to).
+const STORENAV_RECONCILE_MS = 800;
 // Shorter RPC timeout for add-menu-item so a message dropped on a not-yet-ready
 // relay (fresh launch) surfaces fast and the caller's idempotent retry re-posts.
 const MENU_ITEM_ATTACH_TIMEOUT_MS = 1500;
@@ -733,6 +743,142 @@ export function makeUiApi(registry: Registry, bridge: Bridge, relaySecret?: stri
           ch.post({ kind: 'remove-menu-item', menuItemId: opts.id });
           registry.remove(undoId);
         },
+      };
+    },
+
+    addStoreNavButton(opts: StoreNavButtonOptions): StoreNavButtonHandle {
+      // Sync validation (throws before touching the DOM), mirrors addMenuItem.
+      if (!MENU_ITEM_ID_RE.test(opts.id)) {
+        throw new Error(`addStoreNavButton: invalid id "${opts.id}" (allowed: [a-zA-Z0-9_-]{1,64})`);
+      }
+      if (typeof opts.label !== 'string' || opts.label.length === 0
+          || opts.label.length > MENU_ITEM_LABEL_MAX) {
+        throw new Error(`addStoreNavButton: label must be 1..${MENU_ITEM_LABEL_MAX} chars`);
+      }
+      if (opts.icon !== undefined
+          && (typeof opts.icon !== 'string' || opts.icon.length > MENU_ITEM_ICON_MAX_BYTES)) {
+        throw new Error(`addStoreNavButton: icon too large (>${MENU_ITEM_ICON_MAX_BYTES} bytes)`);
+      }
+      if (typeof opts.url !== 'string' || opts.url.length > 2048 || !isUrlSafeForNavigation(opts.url)) {
+        throw new Error('addStoreNavButton: url failed safety check (https, no userinfo/port, ≤2048)');
+      }
+
+      ensureStoreNavStyles();
+      const placement = opts.placement ?? 'start';
+
+      const button = document.createElement('button');
+      button.id = opts.id;
+      button.type = 'button';
+      button.setAttribute('data-sb', '1');
+      button.setAttribute('data-booster-storenav-btn', '');
+      // 'brand' is the default (Figma catalog button is brand green).
+      if ((opts.variant ?? 'brand') === 'brand') {
+        button.setAttribute('data-booster-variant', 'brand');
+      }
+
+      const labelSpan = document.createElement('span');
+      labelSpan.className = 'booster-storenav-label';
+      labelSpan.textContent = opts.label;
+      button.appendChild(labelSpan);
+
+      if (opts.icon) {
+        const iconSpan = document.createElement('span');
+        iconSpan.className = 'booster-storenav-icon';
+        if (/^data:image\//i.test(opts.icon)) {
+          const img = document.createElement('img');
+          img.src = opts.icon; img.alt = '';
+          iconSpan.appendChild(img);
+        } else {
+          // SECURITY: sanitise — semi-privileged store origin, third-party Ui.
+          const svg = sanitizeIconSvg(opts.icon, document);
+          if (svg) iconSpan.appendChild(svg);
+          // else: icon rejected by the sanitiser — button still renders label-only.
+        }
+        button.appendChild(iconSpan);
+      }
+
+      button.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (isUrlSafeForNavigation(opts.url)) {
+          try { window.location.assign(opts.url); } catch { /* best-effort */ }
+        }
+      });
+
+      let aborted = false;
+      let observer: MutationObserver | null = null;
+      let observedRow: HTMLElement | null = null;
+      let warned = false;
+      let threwWarned = false;
+
+      const insert = (row: HTMLElement): void => {
+        if (placement === 'end') row.appendChild(button);
+        else row.insertBefore(button, row.firstChild);
+      };
+
+      // `force` skips the fast-path guard and always re-verifies against
+      // findStoreNav(). The high-frequency observer path calls it unforced (O(1)
+      // when the button is already placed); the slow interval calls it forced so
+      // it keeps re-validating ground truth — self-healing an initial mis-pick
+      // (e.g. a transient candidate group during progressive tab rendering, or
+      // findStoreNav's tie-break ambiguity) that the guard would otherwise
+      // freeze in place for the rest of the page's life.
+      const reconcile = (force: boolean): void => {
+        if (aborted) return;
+        // Fast-path: the button already sits in the current (still-connected)
+        // nav row → nothing to do. Keeps the documentElement-subtree observer
+        // O(1) against the store page's constant DOM churn — findStoreNav only
+        // runs when the button is missing/displaced (first mount, a React
+        // re-render that wiped it, a wholesale row replacement) or on a forced
+        // (interval) re-validation.
+        if (!force && button.isConnected && observedRow && observedRow.isConnected
+            && button.parentElement === observedRow) return;
+        const row = findStoreNav();
+        if (!row) {
+          if (!warned) { warned = true; nativeWarn('addStoreNavButton: store nav not found', { id: opts.id }); }
+          return;
+        }
+        warned = false;
+        observedRow = row;
+        if (!row.contains(button)) insert(row);
+      };
+
+      const runReconcile = (force: boolean): void => {
+        try { reconcile(force); }
+        catch (e) {
+          // Latch like `warned`: under the documentElement-subtree observer a
+          // persistent throw would otherwise re-warn on every store-page
+          // mutation. One diagnostic line is enough signal.
+          if (!threwWarned) { threwWarned = true; nativeWarn('addStoreNavButton reconcile threw', { id: opts.id, error: String(e) }); }
+        }
+      };
+
+      // Insert the button the INSTANT the nav row appears. MutationObserver
+      // callbacks run as microtasks BEFORE the browser paints, so the button
+      // paints in the SAME frame as the native tabs — no visible pop-in. The
+      // store re-injects at document-start on every (full-reload) navigation,
+      // where the React nav row renders AFTER our code runs; observing
+      // documentElement catches that appearance immediately instead of waiting
+      // up to one reconcile tick (the old ~500ms lag). The observer also
+      // re-inserts on a React re-render / row replacement; the interval is a
+      // forced periodic re-validation (ground-truth safety net).
+      observer = new MutationObserver(() => runReconcile(false));
+      observer.observe(document.documentElement, { childList: true, subtree: true });
+      runReconcile(false);   // instant mount if the row is already present
+      const intervalId = setInterval(() => runReconcile(true), STORENAV_RECONCILE_MS);
+
+      const teardown = (): void => {
+        aborted = true;
+        clearInterval(intervalId);
+        if (observer) { try { observer.disconnect(); } catch { /* */ } }
+        observer = null; observedRow = null;
+        button.remove();
+      };
+
+      const undoId = registry.push({ description: `storeNavButton:${opts.id}`, undo: teardown });
+
+      return {
+        remove(): void { teardown(); registry.remove(undoId); },
+        setLabel(s: string): void { labelSpan.textContent = s; },
       };
     },
   };

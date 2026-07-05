@@ -1,6 +1,6 @@
 import { test, expect } from 'bun:test';
 import { createPluginUi } from '../src/plugins/ui';
-import type { UiApi, HeaderButtonOptions, AttachedPopupOptions, OpenWindowOptions, OpenExternalWindowOptions, MenuItemOptions } from '../src/api/api-types';
+import type { UiApi, HeaderButtonOptions, AttachedPopupOptions, OpenWindowOptions, OpenExternalWindowOptions, MenuItemOptions, StoreNavButtonOptions } from '../src/api/api-types';
 
 interface CapturedCalls {
   headerButton?: HeaderButtonOptions;
@@ -8,6 +8,7 @@ interface CapturedCalls {
   window?: OpenWindowOptions;
   externalWindow?: OpenExternalWindowOptions;
   menuItem?: MenuItemOptions;
+  storeNav?: StoreNavButtonOptions;
 }
 
 function makeMockUi(captured: CapturedCalls): UiApi {
@@ -17,6 +18,7 @@ function makeMockUi(captured: CapturedCalls): UiApi {
     openWindow: async (o) => { captured.window = o; return {} as never; },
     openExternalWindow: async (o) => { captured.externalWindow = o; return {} as never; },
     addMenuItem: async (o) => { captured.menuItem = o; return { remove: () => {} }; },
+    addStoreNavButton: (o) => { captured.storeNav = o; return { remove: () => {}, setLabel: () => {} }; },
   };
 }
 
@@ -54,6 +56,13 @@ test('addMenuItem auto-prefixes id', async () => {
   await wrapped.addMenuItem({ id: 'booster-catalog', menu: 'store', label: 'Catalog', url: 'https://example.com/x' });
   expect(captured.menuItem?.id).toBe('booster-addfunds__booster-catalog');
   expect(captured.menuItem?.menu).toBe('store');
+});
+
+test('addStoreNavButton auto-prefixes id', () => {
+  const captured: CapturedCalls = {};
+  const wrapped = createPluginUi(makeMockUi(captured), 'booster-addfunds');
+  wrapped.addStoreNavButton({ id: 'booster-catalog-nav', label: 'Каталог игр', url: 'https://example.com/x', variant: 'brand' }); // strings-allow-cyrillic
+  expect(captured.storeNav?.id).toBe('booster-addfunds__booster-catalog-nav');
 });
 
 test('invalid user id is rejected (path-traversal characters)', () => {

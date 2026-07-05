@@ -217,7 +217,12 @@ manifest-записи плагина.
 
 `Capability.Ui` открывает `ctx.sb.ui`: `addHeaderButton`, `attachPopup`,
 `openWindow`, `openExternalWindow`, `addMenuItem` (пункт в верхней навигации
-Steam — МАГАЗИН / БИБЛИОТЕКА / …, с навигацией главного окна по клику).
+Steam — МАГАЗИН / БИБЛИОТЕКА / …, с навигацией главного окна по клику),
+`addStoreNavButton` (кнопка в верхнем таб-баре страницы магазина Steam —
+«Просмотр / Рекомендации / Категории / …»; только `Web`-контекст; опции
+`id, label, icon?, url, variant?, placement?`; переживает React re-renders
+и пересборки Steam через структурный якорь + reconcile; throws on invalid
+id, label, icon, or url).
 Полный справочник — [`./ui-api.md`](./ui-api.md).
 
 Плагин, которому нужна активация продуктовых ключей Steam, объявляет

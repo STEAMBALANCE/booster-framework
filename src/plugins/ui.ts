@@ -5,6 +5,7 @@ import type {
   OpenWindowOptions, OpenWindowHandle,
   OpenExternalWindowOptions, OpenExternalWindowHandle,
   MenuItemOptions, MenuItemHandle,
+  StoreNavButtonOptions, StoreNavButtonHandle,
 } from '../api/api-types';
 
 const USER_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
@@ -39,6 +40,9 @@ export function createPluginUi(realUi: UiApi, pluginId: string): UiApi {
     },
     async addMenuItem(opts: MenuItemOptions): Promise<MenuItemHandle> {
       return await realUi.addMenuItem({ ...opts, id: prefixId(pluginId, opts.id) });
+    },
+    addStoreNavButton(opts: StoreNavButtonOptions): StoreNavButtonHandle {
+      return realUi.addStoreNavButton({ ...opts, id: prefixId(pluginId, opts.id) });
     },
   });
 }
