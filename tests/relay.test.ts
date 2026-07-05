@@ -201,6 +201,40 @@ test('relay handles navigate request → MWBM.LoadURL + navigate-done reply', as
   sender.close();
 });
 
+test('relay navigate prefers MWBM.ShowURL over LoadURL (works from Library)', async () => {
+  // ShowURL switches the main window's router to the /browser/ route so the
+  // navigation is visible even when the main window is showing the Library —
+  // LoadURL alone silently no-ops there. When both exist, ShowURL must win.
+  let showUrl = '';
+  let loadUrl = '';
+  const mwbm = {
+    ShowURL: (u: string) => { showUrl = u; },
+    LoadURL: (u: string) => { loadUrl = u; },
+  };
+  // @ts-expect-error
+  globalThis.MainWindowBrowserManager = mwbm;
+  (win as unknown as { MainWindowBrowserManager: unknown }).MainWindowBrowserManager = mwbm;
+
+  const { startRelay } = await import('../src/relay/shared-context');
+  stopRelay = startRelay(createScope());
+
+  const sender = new BroadcastChannel(RELAY_CHANNEL);
+  const replies: Array<Record<string, unknown>> = [];
+  sender.addEventListener('message', (e: MessageEvent) => {
+    replies.push(e.data as Record<string, unknown>);
+  });
+
+  sender.postMessage({ kind: 'navigate', requestId: 9, url: 'https://steambalance.cc/booster/catalog' });
+  await flushBC();
+
+  expect(showUrl).toBe('https://steambalance.cc/booster/catalog');
+  expect(loadUrl).toBe('');   // LoadURL NOT called when ShowURL is available
+  expect(
+    replies.find((r) => r.kind === 'navigate-done' && r.requestId === 9),
+  ).toBeTruthy();
+  sender.close();
+});
+
 test('relay handles attach-popup → constructs Popup with chromeless flags + writes html + reply', async () => {
   const cap = newCapture();
   installPopupManagerMock({ capture: cap });

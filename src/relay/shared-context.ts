@@ -94,7 +94,7 @@ declare global {
   }
   interface Window {
     SteamClient?: SteamClientShape;
-    MainWindowBrowserManager?: { LoadURL: (url: string) => void; m_tabbedBrowserStore?: any };
+    MainWindowBrowserManager?: { ShowURL?: (url: string) => void; LoadURL: (url: string) => void; m_tabbedBrowserStore?: any };
     g_PopupManager?: SteamPopupManager;
     __sb_relay_started?: boolean;
     __sb_relay_teardown?: () => void;
@@ -712,7 +712,8 @@ export function startRelay(scope: ScopeApi, sec?: SecContext): () => void {
 
   function handleNavigate(msg: NavigateRequest): void {
     try {
-      if (!window.MainWindowBrowserManager?.LoadURL) {
+      const mwbm = window.MainWindowBrowserManager;
+      if (!mwbm || (!mwbm.ShowURL && !mwbm.LoadURL)) {
         post({
           kind: 'navigate-error',
           requestId: msg.requestId,
@@ -720,7 +721,15 @@ export function startRelay(scope: ScopeApi, sec?: SecContext): () => void {
         });
         return;
       }
-      window.MainWindowBrowserManager.LoadURL(msg.url);
+      // ShowURL switches the main window's router to the /browser/ route AND
+      // loads the URL — this is what Steam's own store-nav items call, so it
+      // works from any view (e.g. navigating from inside the Library). LoadURL
+      // only rewrites the (possibly hidden) browser's content without switching
+      // the active view, so it does nothing when the main window is showing the
+      // Library. Fall back to LoadURL on older clients. Mirrors the same fix in
+      // relay/menu-items.ts.
+      if (mwbm.ShowURL) mwbm.ShowURL(msg.url);
+      else mwbm.LoadURL(msg.url);
       post({ kind: 'navigate-done', requestId: msg.requestId });
     } catch (e) {
       post({
