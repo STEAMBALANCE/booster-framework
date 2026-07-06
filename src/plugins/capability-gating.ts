@@ -9,7 +9,7 @@ import {
  * Always-available modules (no gating): version, state, context, lifecycle,
  * scope, plugins, app.
  *
- * Capability-gated modules: ui, steam, configs, bus, pages, keys —
+ * Capability-gated modules: ui, steam, configs, bus, pages, keys, net —
  * present only if in the `granted` set.
  *
  * Note: types are widened with `as never` because TS makes optional
@@ -37,5 +37,6 @@ export function buildGatedSb(real: SbApi, granted: ReadonlySet<Capability>): SbA
     bus:     granted.has(Capability.Bus)     ? real.bus     : (undefined as never),
     pages:   granted.has(Capability.Pages)   ? real.pages   : (undefined as never),
     keys:    granted.has(Capability.Keys)    ? real.keys    : (undefined as never),
+    net:     granted.has(Capability.Net)     ? real.net     : (undefined as never),
   });
 }

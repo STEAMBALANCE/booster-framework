@@ -657,6 +657,43 @@ export interface KeysApi {
   activate(productKey: string): Promise<ActivateOutcome>;
 }
 
+/** Native-proxied HTTPS to one of the plugin's signed `allowedHosts`.
+ *  Bypasses page CSP/CORS via the native injector. Gated under Capability.Net. */
+export interface NetApi {
+  /** Rejects on host-not-allowed, missing Capability.Net, size-cap exceeded,
+   *  or transport/TLS failure. Does NOT follow redirects (a 3xx is returned
+   *  verbatim). `url` must be https and its host must be in the plugin's
+   *  manifest `allowedHosts`. Identity headers (x-booster*, User-Agent, Host)
+   *  are set natively and cannot be overridden. */
+  fetch(url: string, init?: NetFetchInit): Promise<NetResponse>;
+}
+
+export interface NetFetchInit {
+  /** v1: GET or POST only. Default 'GET'. */
+  method?: 'GET' | 'POST';
+  /** Safe caller headers only (e.g. Accept, Content-Type). Reserved/identity
+   *  keys are dropped natively. */
+  headers?: Record<string, string>;
+  /** Request body (string; JSON.stringify at the call site). Subject to the
+   *  ~60 KB bridge envelope cap. */
+  body?: string;
+  /** Clamped to ≤ 9000 ms natively (bridge caps at 10 s). */
+  timeoutMs?: number;
+  /** Reserved. v1 does NOT wire abort to the native op (which has its own
+   *  timeout) — passing it is a no-op today. Kept for forward-compat. */
+  signal?: AbortSignal;
+}
+
+export interface NetResponse {
+  /** status in [200,299]. */
+  ok: boolean;
+  status: number;
+  /** Response header subset (e.g. content-type). */
+  headers: Record<string, string>;
+  text(): Promise<string>;
+  json<T = unknown>(): Promise<T>;
+}
+
 export interface LifecycleApi {
   ready(): Promise<void>;
   rollbackAll(): void;
@@ -756,6 +793,7 @@ export const Capability = {
   Bus:      'bus',
   Pages:    'pages',
   Keys:     'keys',
+  Net:      'net',
 } as const;
 export type Capability = typeof Capability[keyof typeof Capability];
 
@@ -869,4 +907,6 @@ export interface SbApi {
   readonly plugins: PluginsApi;
   /** Steam product-key activation. Gated by Capability.Keys. */
   readonly keys: KeysApi;
+  /** Native-proxied fetch to signed allowedHosts. Gated by Capability.Net. */
+  readonly net: NetApi;
 }

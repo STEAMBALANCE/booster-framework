@@ -177,6 +177,7 @@ export const Capability = {
   Bus:      'bus',
   Pages:    'pages',
   Keys:     'keys',
+  Net:      'net',
 } as const;
 ```
 
@@ -186,7 +187,7 @@ manifest даёт `[Ui]` — effective `{Ui}`, и `ctx.sb.configs === undefined`
 
 Доступны и сторонним (`approvedPlugins[]`), и внутренним
 (`requiredPlugins[]`) плагинам: `Ui`, `Steam`, `Configs`, `Bus`, `Pages`,
-`Keys`. Никакого автоматически выдаваемого набора нет — capability
+`Keys`, `Net`. Никакого автоматически выдаваемого набора нет — capability
 действует, только если она перечислена в `grantedCapabilities`
 manifest-записи плагина.
 
@@ -249,6 +250,30 @@ sb.plugins.register({
 Manifest-entry должен включать `'keys'` в `grantedCapabilities`. Без
 этого `ctx.sb.keys === undefined`. Подробнее об API и контракте
 non-idempotency — [`./steam-api.md`](./steam-api.md#keys-api).
+
+Плагин, которому нужен нативно-проксируемый fetch, объявляет
+`Capability.Net` в своём `register` вызове:
+
+```ts
+sb.plugins.register({
+  id: 'my-net-plugin',
+  // ...
+  capabilities: [Capability.Net],
+  async init(ctx) {
+    if (!ctx.granted.has(Capability.Net)) return;
+    const r = await ctx.sb.net.fetch('https://steambalance.cc/api/x');
+    // ...
+  },
+});
+```
+
+Manifest-entry должен включать `'net'` в `grantedCapabilities` И
+`allowedHosts: string[]` с каждым хостом, который плагин собирается
+запрашивать через `sb.net.fetch`. Канонический формат хоста —
+lowercase, ASCII, без схемы/порта/пути/userinfo/glob (см. `ALLOWED_HOST_RE`
+в `booster-framework/src/testing/plugin-meta.ts`). Без `allowedHosts` с
+нужным хостом нативный `net_fetch` op отклонит запрос. Подробнее —
+[`./net-api.md`](./net-api.md).
 
 ### `init: (ctx) => InitResult | Promise<InitResult>` (REQUIRED)
 
@@ -374,6 +399,37 @@ export const pluginMeta: PluginMeta = {
     'booster-addfunds.topup-requested',
     'booster-addfunds.user.snapshot.request',
   ],
+};
+```
+
+## Net allowedHosts ACL (`allowedHosts`)
+
+Плагин с `Capability.Net` может вызвать `ctx.sb.net.fetch(url, init)`
+ТОЛЬКО против хостов, перечисленных в поле `allowedHosts` подписанной
+manifest-записи этого плагина — нет собственного prefix-исключения
+(в отличие от `subscribeTopics`), потому что у плагина нет "своих" хостов
+по умолчанию.
+
+`allowedHosts` — необязательное поле в manifest-записи; по умолчанию `[]`
+(плагины без `Capability.Net` его не указывают). Каждый элемент —
+канонический hostname: lowercase, ASCII, без схемы/порта/пути/userinfo/glob.
+
+Для внутренних плагинов (`requiredPlugins[]`) поле задаётся в
+`packages/<id>/src/plugin-meta.ts` → `allowedHosts: [...]` и проходит
+через `ManifestPluginEntry.allowedHosts` (тот же путь threading'а, что
+`subscribeTopics`) в signed manifest. Инжектор-side CLI (`approve-plugin`)
+и pipeline-эмиттер для `allowedHosts` — предмет отдельного плана
+(native-op + manifest-pipeline изменения); в этом репозитории описан
+только framework-side тип + валидация.
+
+Пример:
+
+```ts
+// plugin-meta.ts
+export const pluginMeta: PluginMeta = {
+  id: 'booster-checkout',
+  // ...
+  allowedHosts: ['steambalance.cc'],
 };
 ```
 

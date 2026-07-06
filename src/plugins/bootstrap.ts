@@ -23,6 +23,7 @@ import { createPluginScope } from './scope';
 import { createPluginConfigs } from './configs';
 import { createPluginBus } from './bus';
 import { createPluginUi } from './ui';
+import { makeNetApi } from '../api/net';
 import { createPluginLog } from './log';
 import type { PluginRegistry } from './registry';
 
@@ -261,6 +262,7 @@ export async function drainPluginsOnReady(args: DrainPluginsArgs): Promise<Plugi
         ? createPluginUi(realSb.ui, authoritativeId)
         : (undefined as never),
       configs: pluginConfigs,
+      net: granted.has(Capability.Net) ? makeNetApi(tb) : (undefined as never),
     };
 
     return {

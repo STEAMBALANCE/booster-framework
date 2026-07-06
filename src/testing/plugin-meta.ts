@@ -5,8 +5,8 @@
 // KNOWN_CAPS/KNOWN_KINDS are exported so the manifest emitter and the
 // approve-plugin CLI share a single source-of-truth.
 export type Capability =
-  | 'ui' | 'steam' | 'configs' | 'bus' | 'pages' | 'keys';
-export const KNOWN_CAPS: readonly Capability[] = ['ui', 'steam', 'configs', 'bus', 'pages', 'keys'];
+  | 'ui' | 'steam' | 'configs' | 'bus' | 'pages' | 'keys' | 'net';
+export const KNOWN_CAPS: readonly Capability[] = ['ui', 'steam', 'configs', 'bus', 'pages', 'keys', 'net'];
 
 // Mirror booster-framework/src/api/api-types.ts::ContextKind (4 values incl.
 // 'shared' for SharedJSContext relay) and the native injector's
@@ -24,6 +24,9 @@ export const SEMVER_REGEX = /^\d+\.\d+\.\d+(?:-[a-z0-9.-]+)?$/;
 // Mirror the C++ kSubscribeTopicRe. Accepts lowercase dotted segments (a-z0-9.-)
 // up to 64 chars total, with an optional trailing .* glob suffix.
 export const SUBSCRIBE_TOPIC_RE = /^[a-z][a-z0-9.\-]{0,63}(\.\*)?$/;
+// A canonical hostname: labels of [a-z0-9-] separated by dots, no leading/
+// trailing dot or hyphen per label, at least two labels. No scheme/port/path.
+export const ALLOWED_HOST_RE = /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)(\.([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?))+$/;
 
 export interface PluginMeta {
   id: string;
@@ -37,6 +40,11 @@ export interface PluginMeta {
    *  Optional — external plugins that don't need cross-plugin subscriptions
    *  may omit it. */
   subscribeTopics?: readonly string[];
+  /** Hostnames this plugin may reach via sb.net (native-proxied fetch).
+   *  Canonical: lowercase, ASCII, no scheme/port/path/userinfo/glob.
+   *  Optional — plugins without Capability.Net omit it. Mirrors the native
+   *  injector's manifest-entry validation (manifest_loader.cpp). */
+  allowedHosts?: readonly string[];
 }
 
 export type ValidationResult =
@@ -93,6 +101,21 @@ export function validatePluginMeta(value: unknown): ValidationResult {
       }
       if (!SUBSCRIBE_TOPIC_RE.test(t)) {
         return { ok: false, error: `subscribeTopics[${i}]: invalid topic format: ${t}` };
+      }
+    }
+  }
+  // allowedHosts (optional; canonical hostnames only)
+  if (m.allowedHosts !== undefined) {
+    if (!Array.isArray(m.allowedHosts)) {
+      return { ok: false, error: 'plugin meta: allowedHosts must be array' };
+    }
+    for (let i = 0; i < m.allowedHosts.length; i++) {
+      const h = m.allowedHosts[i];
+      if (typeof h !== 'string') {
+        return { ok: false, error: 'plugin meta: allowedHosts entries must be strings' };
+      }
+      if (!ALLOWED_HOST_RE.test(h)) {
+        return { ok: false, error: `allowedHosts[${i}]: invalid host: ${h}` };
       }
     }
   }

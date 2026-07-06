@@ -9,6 +9,7 @@ import { makeContextApi, readContextKind } from './api/context';
 import { makePagesApi } from './api/pages';
 import { makeBusApi } from './api/bus';
 import { makeKeysApi } from './api/keys';
+import { makeNetApi } from './api/net';
 import { makeAppApi } from './api/app';
 import { maybeCaptureStoreCountry } from './steam-internals/capture-store-country';
 import { createPluginsApi } from './api/plugins';
@@ -159,6 +160,7 @@ declare global {
   const steam = makeSteamApi(registry, fwBridge, sec.relaySecret);
   const configs = makeConfigsApi(fwBridge);
   const keys = makeKeysApi(registry, sec.relaySecret);
+  const net = makeNetApi(fwBridge);
   const app = makeAppApi(fwBridge);
   // Invisible store-country capture. No-op unless this context is on
   // store.steampowered.com (only there is /account/ fetchable same-origin).
@@ -192,6 +194,7 @@ declare global {
     bus,
     plugins,
     keys,
+    net,
   };
   // Defense-in-depth: freeze the api object so no code in this bootstrap
   // or a plugin can add/remove/replace properties. The `lifecycleState`

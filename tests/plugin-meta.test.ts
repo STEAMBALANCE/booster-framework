@@ -54,3 +54,32 @@ test('rejects subscribeTopics entry with space', () => {
   expect(r.ok).toBe(false);
   if (!r.ok) expect(r.error).toMatch(/invalid topic format/);
 });
+
+const NET_BASE = {
+  id: 'booster-x', version: '1.0.0', apiVersion: 1,
+  contextKinds: ['web'] as const, urlPatterns: [], grantedCapabilities: ['net'] as const,
+};
+
+test('accepts valid allowedHosts', () => {
+  const r = validatePluginMeta({ ...NET_BASE, allowedHosts: ['steambalance.cc'] });
+  expect(r.ok).toBe(true);
+});
+test('accepts omitted allowedHosts', () => {
+  const r = validatePluginMeta({ ...NET_BASE, allowedHosts: undefined });
+  expect(r.ok).toBe(true);
+});
+test('rejects allowedHosts with scheme', () => {
+  const r = validatePluginMeta({ ...NET_BASE, allowedHosts: ['https://steambalance.cc'] });
+  expect(r.ok).toBe(false);
+  if (!r.ok) expect(r.error).toMatch(/allowedHosts\[0\]/);
+});
+test('rejects allowedHosts with port or path or uppercase', () => {
+  for (const bad of ['steambalance.cc:443', 'steambalance.cc/x', 'STEAMBALANCE.cc', 'a@b.cc', '*.steambalance.cc']) {
+    const r = validatePluginMeta({ ...NET_BASE, allowedHosts: [bad] });
+    expect(r.ok).toBe(false);
+  }
+});
+test('grantedCapabilities accepts "net"', () => {
+  const r = validatePluginMeta({ ...NET_BASE, grantedCapabilities: ['net'] });
+  expect(r.ok).toBe(true);
+});

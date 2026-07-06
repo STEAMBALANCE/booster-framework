@@ -25,6 +25,7 @@ export const Capability = {
   Bus:      'bus',
   Pages:    'pages',
   Keys:     'keys',
+  Net:      'net',
 } as const;
 ```
 
@@ -36,6 +37,7 @@ export const Capability = {
 | `Bus`        | `ctx.sb.bus`        | Cross-target pub/sub `publish`/`subscribe`.                      |
 | `Pages`      | `ctx.sb.pages`      | URL-matched page router (`register({name, match, mount})`).      |
 | `Keys`       | `ctx.sb.keys`       | `activate(productKey)` — активирует продуктовый ключ Steam. Потребляет ключ при успехе; **не идемпотентно**. |
+| `Net`        | `ctx.sb.net`        | `fetch(url, init)` — нативно-проксируемый HTTPS к хостам из подписанного `allowedHosts` плагина. |
 
 ## Always-available (не требуют capability)
 
@@ -69,6 +71,7 @@ capability'ев, если manifest-владелец (оператор STEAMBALAN
 - `Bus`
 - `Pages`
 - `Keys`
+- `Net`
 
 ## Как плагин запрашивает capabilities
 
@@ -313,6 +316,35 @@ sb.plugins.register({
 });
 ```
 
+### `Net`
+
+`Capability.Net` открывает `sb.net.fetch(url, init)` — нативно-проксируемый
+HTTPS к хостам из подписанного `allowedHosts` плагина, в обход CSP/CORS
+Steam-страниц. Идентификационные заголовки (`x-booster*`, User-Agent) ставит
+нативный инжектор; редиректы не выполняются.
+
+```ts
+import { ContextKind, Capability, type PluginContext } from '@steambalance/booster-framework';
+declare const sb: { plugins: { register: (m: unknown) => void } };
+
+sb.plugins.register({
+  id: 'demo-net',
+  version: '0.0.1',
+  apiVersion: 1,
+  displayName: 'Net demo',
+  contextKinds: [ContextKind.Main],
+  capabilities: [Capability.Net],
+  async init(ctx: PluginContext): Promise<void> {
+    if (!ctx.granted.has(Capability.Net)) return;
+    const r = await ctx.sb.net.fetch('https://steambalance.cc/api/booster/catalogue');
+    if (r.ok) { const { data } = await r.json<{ data: unknown[] }>(); }
+  },
+});
+```
+
+Манифест-запись плагина ОБЯЗАНА содержать `allowedHosts` с этим хостом.
+См. [`./net-api.md`](./net-api.md).
+
 ## Diagnostics
 
 Capability-skipping тих по дизайну (нет warn-лога) — это намеренно: после
@@ -333,5 +365,7 @@ flowchart'а.
   в `PluginManifest`.
 - [`./steam-api.md`](./steam-api.md) — `Keys` API: `sb.keys.activate`,
   `ActivateOutcome`, error codes.
+- [`./net-api.md`](./net-api.md) — `Net` API: `sb.net.fetch`, `allowedHosts`,
+  ошибки, лимиты.
 - [`./lifecycle.md`](./lifecycle.md) — когда capability вычисляется
   (на момент `drainPluginsOnReady`).

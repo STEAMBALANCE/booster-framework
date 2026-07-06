@@ -159,6 +159,7 @@ export function createTestPluginContext(opts: TestPluginContextOptions = {}): {
     bus:     granted.has(Capability.Bus)     ? mockBus     : (undefined as never),
     pages:   granted.has(Capability.Pages)   ? mockPages   : (undefined as never),
     keys:    granted.has(Capability.Keys)    ? { activate: async () => ({ ok: true, products: [], transactionId: '0' }) } : (undefined as never),
+    net:     granted.has(Capability.Net)     ? { fetch: async () => ({ ok: true, status: 200, headers: {}, text: async () => '', json: async <T>() => ({} as T) }) } : (undefined as never),
   };
 
   const ctx: PluginContext = {

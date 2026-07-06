@@ -20,6 +20,8 @@
   `openWindow`, `openExternalWindow`.
 - [Steam API](./steam-api.md) — `sb.steam.openUrl`, `getCurrentUser`,
   `getCurrentUserAsync`, `onUserChange`, `getStoreCountry`.
+- [Net API](./net-api.md) — `sb.net.fetch`, `allowedHosts`,
+  нативно-проксируемый HTTPS в обход CSP/CORS.
 - [Configs API](./configs-api.md) — `sb.configs.read` /
   `write`, per-plugin namespace, шифрование libsodium
   (XChaCha20-Poly1305), квота.

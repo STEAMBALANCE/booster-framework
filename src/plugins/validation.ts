@@ -16,6 +16,11 @@ export interface ManifestPluginEntry {
    *  is either an exact topic string or a `prefix.*` glob. Own-prefix
    *  (`<pluginId>.*`) is always allowed regardless of this list. */
   subscribeTopics?: string[];
+  /** Hostnames this plugin may reach via sb.net (native-proxied fetch).
+   *  Canonical: lowercase, ASCII, no scheme/port/path/userinfo/glob.
+   *  Manifest-authoritative, like subscribeTopics — no cross-validation
+   *  against bundle-declared metadata needed. */
+  allowedHosts?: string[];
 }
 
 export type ValidationResult =
