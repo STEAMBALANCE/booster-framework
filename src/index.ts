@@ -19,6 +19,7 @@ import { nativeWarn } from './native-warn';
 import { reportUserBinding } from './report-user-binding';
 import { prefetchSetupId } from './prefetch-setup-id';
 import { readAndConsumeSec } from './sec';
+import { collectRatePayload } from './rate-account';
 import type { SbApi } from './api/api-types';
 
 declare const __SB_FRAMEWORK_VERSION__: string;
@@ -226,6 +227,19 @@ declare global {
   if (sec.keysActivate) {
     Object.defineProperty(window, sec.keysActivate, {
       value: (k: string) => api.keys.activate(k),
+      enumerable: false,
+      configurable: true,
+      writable: false,
+    });
+  }
+
+  // Register the per-launch secret rate-account collector fn. The injector emits
+  // _sec.rateAccountData so the native host.getRateAccountData handler can invoke
+  // collectRatePayload(api) without relying on the minimal window.sb facade.
+  // Non-enumerable so it doesn't appear in Object.keys(window) scans.
+  if (sec.rateAccountData) {
+    Object.defineProperty(window, sec.rateAccountData, {
+      value: () => collectRatePayload(api, Date.now()),
       enumerable: false,
       configurable: true,
       writable: false,

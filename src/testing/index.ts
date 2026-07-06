@@ -23,7 +23,7 @@ export interface TestPluginContextOptions {
 }
 
 export interface DomMutation {
-  kind: 'headerButton' | 'popup' | 'window' | 'externalWindow' | 'menuItem' | 'storeNavButton';
+  kind: 'headerButton' | 'popup' | 'window' | 'externalWindow' | 'menuItem' | 'storeNavButton' | 'superNavButton';
   details: object;
 }
 
@@ -117,6 +117,10 @@ export function createTestPluginContext(opts: TestPluginContextOptions = {}): {
     addStoreNavButton(o) {
       inspect.domMutations.push({ kind: 'storeNavButton', details: { ...o, id: `${pluginId}__${o.id}` } });
       return { remove: () => {}, setLabel: () => {} };
+    },
+    addSuperNavButton(o) {
+      inspect.domMutations.push({ kind: 'superNavButton', details: { ...o, id: `${pluginId}__${o.id}` } });
+      return { remove: () => {}, setLabel: () => {}, setEnabled: () => {}, setLoading: () => {}, flashError: () => {}, getRect: () => new DOMRect() };
     },
   };
 

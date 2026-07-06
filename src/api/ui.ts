@@ -10,12 +10,15 @@ import type {
   MenuItemHandle,
   StoreNavButtonOptions,
   StoreNavButtonHandle,
+  SuperNavButtonOptions,
+  SuperNavButtonHandle,
 } from './api-types';
 import { createExternalWindowApi } from './external-window';
 import type { Registry } from '../registry';
 import type { Bridge } from '../bridge';
 import { waitForToolbar } from '../steam-internals/header-selectors';
 import { findStoreNav } from '../steam-internals/store-nav-selectors';
+import { findSuperNav } from '../steam-internals/supernav-selectors';
 import {
   POPUP_ID_RE, OPEN_WINDOW_HTML_MAX_BYTES, WINDOW_MESSAGE_MAX_BYTES,
   MENU_ITEM_ID_RE, MENU_ITEM_LABEL_MAX, MENU_ITEM_ICON_MAX_BYTES,
@@ -26,6 +29,7 @@ import { createRelayChannel, isTagged, stripTag } from '../relay/channel';
 import { nativeWarn } from '../native-warn';
 import { ensureToolbarStyles } from './ui-toolbar-styles';
 import { ensureStoreNavStyles } from './ui-storenav-styles';
+import { ensureSuperNavStyles } from './ui-supernav-styles';
 import { wireTooltip } from './ui-tooltip';
 import { isUrlSafeForNavigation } from './steam';
 import { sanitizeIconSvg } from './svg-sanitize';
@@ -36,6 +40,10 @@ const ATTACH_TIMEOUT_MS = 5000;
 // covers the case where `row` itself was replaced wholesale (a fresh row
 // element the observer isn't attached to).
 const STORENAV_RECONCILE_MS = 800;
+// Supernav button reconcile cadence + red error-flash duration. Same forced
+// re-validation shape as the store-nav button.
+const SUPERNAV_RECONCILE_MS = 800;
+const SUPERNAV_ERROR_FLASH_MS = 1000;
 // Shorter RPC timeout for add-menu-item so a message dropped on a not-yet-ready
 // relay (fresh launch) surfaces fast and the caller's idempotent retry re-posts.
 const MENU_ITEM_ATTACH_TIMEOUT_MS = 1500;
@@ -879,6 +887,171 @@ export function makeUiApi(registry: Registry, bridge: Bridge, relaySecret?: stri
       return {
         remove(): void { teardown(); registry.remove(undoId); },
         setLabel(s: string): void { labelSpan.textContent = s; },
+      };
+    },
+
+    addSuperNavButton(opts: SuperNavButtonOptions): SuperNavButtonHandle {
+      // Sync validation (throws before touching the DOM), mirrors addStoreNavButton.
+      if (!MENU_ITEM_ID_RE.test(opts.id)) {
+        throw new Error(`addSuperNavButton: invalid id "${opts.id}" (allowed: [a-zA-Z0-9_-]{1,64})`);
+      }
+      if (typeof opts.label !== 'string' || opts.label.length === 0
+          || opts.label.length > MENU_ITEM_LABEL_MAX) {
+        throw new Error(`addSuperNavButton: label must be 1..${MENU_ITEM_LABEL_MAX} chars`);
+      }
+      if (opts.icon !== undefined
+          && (typeof opts.icon !== 'string' || opts.icon.length > MENU_ITEM_ICON_MAX_BYTES)) {
+        throw new Error(`addSuperNavButton: icon too large (>${MENU_ITEM_ICON_MAX_BYTES} bytes)`);
+      }
+      if (typeof opts.onClick !== 'function') {
+        throw new Error('addSuperNavButton: onClick must be a function');
+      }
+
+      ensureSuperNavStyles();
+      const placement = opts.placement ?? 'after-profile';
+
+      // --- Build the button (div + Focusable, like addHeaderButton) ---
+      const button = document.createElement('div');
+      button.id = opts.id;
+      button.setAttribute('data-sb', '1');
+      button.setAttribute('data-booster-supernav-btn', '');
+      if ((opts.variant ?? 'brand') === 'brand') {
+        button.setAttribute('data-booster-variant', 'brand');
+      }
+      button.classList.add('Focusable');
+
+      const spinner = document.createElement('span');
+      spinner.className = 'booster-supernav-spinner';
+      button.appendChild(spinner);
+
+      const labelSpan = document.createElement('span');
+      labelSpan.className = 'booster-supernav-label';
+      labelSpan.textContent = opts.label;
+      button.appendChild(labelSpan);
+
+      if (opts.icon) {
+        const iconSpan = document.createElement('span');
+        iconSpan.className = 'booster-supernav-icon';
+        if (/^data:image\//i.test(opts.icon)) {
+          const img = document.createElement('img'); img.src = opts.icon; img.alt = '';
+          iconSpan.appendChild(img);
+        } else {
+          // SECURITY: sanitise — semi-privileged Main shell, third-party Ui.
+          const svg = sanitizeIconSvg(opts.icon, document);
+          if (svg) iconSpan.appendChild(svg);
+        }
+        button.appendChild(iconSpan);
+      }
+
+      // --- State ---
+      let busy = false;
+      let disabled = false;   // via setEnabled(false)
+      let loading = false;    // via setLoading(true)
+      let errorTimer: ReturnType<typeof setTimeout> | null = null;
+
+      const syncDisabledAttr = (): void => {
+        if (disabled || loading) button.setAttribute('aria-disabled', 'true');
+        else button.removeAttribute('aria-disabled');
+      };
+
+      button.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (disabled || loading || busy) return;
+        busy = true;
+        void (async () => {
+          try { await opts.onClick({ rect: button.getBoundingClientRect() }); }
+          catch { /* best-effort */ }
+          finally { busy = false; }
+        })();
+      });
+
+      // --- Persona/account name learned from the shared relay channel ---
+      let currentPersona: string | undefined;
+      let currentAccount: string | undefined;
+      const names = () => ({ personaName: currentPersona, accountName: currentAccount });
+
+      const onRelayMsg = (ev: MessageEvent): void => {
+        const raw = ev.data;
+        if (!isTagged(raw, relaySecret)) return;         // forged-snapshot guard
+        const msg = stripTag(raw as Record<string, unknown>);
+        if (msg['kind'] !== 'user-snapshot') return;
+        const snap = msg['snapshot'] as { personaName?: string; accountName?: string } | undefined;
+        if (!snap) return;
+        const nextP = typeof snap.personaName === 'string' ? snap.personaName : undefined;
+        const nextA = typeof snap.accountName === 'string' ? snap.accountName : undefined;
+        const changed = nextP !== currentPersona || nextA !== currentAccount;
+        currentPersona = nextP; currentAccount = nextA;
+        if (changed) runReconcile(true);                  // account switch → re-anchor
+      };
+      ch.raw.addEventListener('message', onRelayMsg);
+      ch.post({ kind: 'request-snapshot' });              // prime (Ui-only plugins too)
+
+      // --- Reconcile (verbatim shape of addStoreNavButton) ---
+      let aborted = false;
+      let observer: MutationObserver | null = null;
+      let observedContainer: HTMLElement | null = null;
+      let warned = false;
+      let threwWarned = false;
+
+      const insert = (a: { container: HTMLElement; anchorTab: HTMLElement }): void => {
+        if (placement === 'end') a.container.appendChild(button);
+        else a.container.insertBefore(button, a.anchorTab.nextSibling);
+      };
+
+      const reconcile = (force: boolean): void => {
+        if (aborted) return;
+        if (!force && button.isConnected && observedContainer && observedContainer.isConnected
+            && button.parentElement === observedContainer) return;
+        const anchor = findSuperNav(names());
+        if (!anchor) {
+          if (!warned) { warned = true; nativeWarn('addSuperNavButton: supernav not found', { id: opts.id }); }
+          return;
+        }
+        warned = false;
+        observedContainer = anchor.container;
+        if (!anchor.container.contains(button)) insert(anchor);
+      };
+
+      const runReconcile = (force: boolean): void => {
+        try { reconcile(force); }
+        catch (e) {
+          if (!threwWarned) { threwWarned = true; nativeWarn('addSuperNavButton reconcile threw', { id: opts.id, error: String(e) }); }
+        }
+      };
+
+      observer = new MutationObserver(() => runReconcile(false));
+      observer.observe(document.documentElement, { childList: true, subtree: true });
+      runReconcile(false);
+      const intervalId = setInterval(() => runReconcile(true), SUPERNAV_RECONCILE_MS);
+
+      const teardown = (): void => {
+        aborted = true;
+        clearInterval(intervalId);
+        if (errorTimer) { clearTimeout(errorTimer); errorTimer = null; }
+        if (observer) { try { observer.disconnect(); } catch { /* */ } }
+        observer = null; observedContainer = null;
+        try { ch.raw.removeEventListener('message', onRelayMsg); } catch { /* */ }
+        button.remove();
+      };
+
+      const undoId = registry.push({ description: `superNavButton:${opts.id}`, undo: teardown });
+
+      return {
+        remove(): void { teardown(); registry.remove(undoId); },
+        setLabel(s: string): void { labelSpan.textContent = s; },
+        setEnabled(on: boolean): void { disabled = !on; syncDisabledAttr(); },
+        setLoading(on: boolean): void {
+          loading = on;
+          if (on) button.setAttribute('data-booster-loading', 'true');
+          else button.removeAttribute('data-booster-loading');
+          syncDisabledAttr();
+        },
+        flashError(): void {
+          button.setAttribute('data-booster-error', 'true');
+          if (errorTimer) clearTimeout(errorTimer);
+          errorTimer = setTimeout(() => { button.removeAttribute('data-booster-error'); errorTimer = null; }, SUPERNAV_ERROR_FLASH_MS);
+        },
+        getRect(): DOMRect { return button.getBoundingClientRect(); },
       };
     },
   };

@@ -21,6 +21,12 @@ export interface SecContext {
    *  delegate to `api.keys.activate` so the native host.activateKey handler
    *  can reach it without relying on the minimal window.sb facade. */
   keysActivate?: string;
+  /** Per-launch secret name for the JS rate-account collector global. When set,
+   *  the main-shell bootstrap registers `window[rateAccountData]` as a
+   *  non-enumerable delegate to `collectRatePayload(api)` so the native
+   *  host.getRateAccountData handler can reach it without relying on the
+   *  minimal window.sb facade. */
+  rateAccountData?: string;
 }
 
 export function readAndConsumeSec(): SecContext {
@@ -45,6 +51,9 @@ export function readAndConsumeSec(): SecContext {
   const keysActivate = typeof secObj['keysActivate'] === 'string'
     ? secObj['keysActivate']
     : undefined;
+  const rateAccountData = typeof secObj['rateAccountData'] === 'string'
+    ? secObj['rateAccountData']
+    : undefined;
   delete obj['_sec'];
-  return { frameworkToken, resolverName, busDispatchName, relaySecret, keysActivate };
+  return { frameworkToken, resolverName, busDispatchName, relaySecret, keysActivate, rateAccountData };
 }

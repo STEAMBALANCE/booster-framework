@@ -305,6 +305,53 @@ export interface StoreNavButtonHandle {
   setLabel(s: string): void;
 }
 
+/** Where the button lands relative to the supernav's `<НИК>` (profile) tab. */
+export type SuperNavButtonPlacement = 'after-profile' | 'end';
+
+export interface SuperNavButtonOptions {
+  /** DOM id AND the `[data-booster-supernav-btn]` style anchor. Charset
+   *  MENU_ITEM_ID_RE ([a-zA-Z0-9_-]{1,64}); validated (throws) because it is
+   *  used inside a CSS attribute selector. */
+  id: string;
+  /** Button text. Rendered via `textContent`; the stylesheet uppercases it.
+   *  1..120 chars — validated (throws). */
+  label: string;
+  /** Optional inline SVG string or `data:image/*` URI, rendered next to the
+   *  label. SVG is SANITISED (allowlist tags/attrs) — the supernav lives in
+   *  the semi-privileged Main shell and `Capability.Ui` is reachable by
+   *  third-party approved plugins. `data:image/*` → `<img>`. Capped at 16 KB. */
+  icon?: string;
+  /** `'after-profile'` (default) inserts right after the `<НИК>` profile tab;
+   *  `'end'` appends as the last child of the supernav row. */
+  placement?: SuperNavButtonPlacement;
+  /** Visual variant. Default `'brand'` (SteamBalance green pill). */
+  variant?: 'default' | 'brand';
+  /** Click handler — unlike `addStoreNavButton` (which navigates to a `url`),
+   *  the supernav button is onClick-only. Receives the button's live
+   *  `DOMRect` so the handler can anchor its own UI. A re-entrant click while
+   *  a returned promise is still pending is ignored (busy guard). */
+  onClick: (ctx: { rect: DOMRect }) => void | Promise<void>;
+}
+
+export interface SuperNavButtonHandle {
+  /** Remove the button, stop the reconcile loop, disconnect the observer,
+   *  drop the user-snapshot listener, and clear the error timer. Also fires
+   *  automatically on `lifecycle.rollbackAll()`. */
+  remove(): void;
+  /** Replace the label `textContent` in place, without recreating the node. */
+  setLabel(s: string): void;
+  /** Enable / disable the button. Disabled ⇒ `aria-disabled="true"`, clicks
+   *  are ignored. */
+  setEnabled(on: boolean): void;
+  /** Toggle the busy spinner. While loading the button shows a spinner, reads
+   *  as disabled (`aria-disabled`), and ignores clicks. */
+  setLoading(on: boolean): void;
+  /** Flash the button red for ~1s to signal a failed action, then revert. */
+  flashError(): void;
+  /** Live `DOMRect` of the button (via `getBoundingClientRect`). */
+  getRect(): DOMRect;
+}
+
 export interface UiApi {
   addHeaderButton(opts: HeaderButtonOptions): HeaderButtonHandle;
   /** Allocate a native dropdown popup once at startup and toggle it on
@@ -326,6 +373,16 @@ export interface UiApi {
    *  React re-renders + Steam rebuilds via a structural anchor + reconcile.
    *  Throws synchronously on invalid id, label, icon, or url. */
   addStoreNavButton(opts: StoreNavButtonOptions): StoreNavButtonHandle;
+  /** Inject a persistent button into the Steam CLIENT supernav (the top
+   *  main-nav row «Магазин / Библиотека / Сообщество / <НИК>»), anchored right
+   *  after the `<НИК>` profile tab. Runs direct-DOM in the Main shell (no relay
+   *  round-trip → synchronous). The tab is matched structurally by persona OR
+   *  account name learned from the shared `user-snapshot` relay event, so it
+   *  self-heals across Steam rebuilds and account switches. Unlike
+   *  `addStoreNavButton`, it is onClick-only (no navigation `url`) and exposes
+   *  loading / error / enabled states on the handle. Throws synchronously on
+   *  invalid id, label, or icon. Requires Capability.Ui. */
+  addSuperNavButton(opts: SuperNavButtonOptions): SuperNavButtonHandle;
 }
 
 export interface SteamUser {

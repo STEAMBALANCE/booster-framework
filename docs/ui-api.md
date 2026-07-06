@@ -15,6 +15,7 @@ interface UiApi {
   openExternalWindow(opts: OpenExternalWindowOptions): Promise<OpenExternalWindowHandle>;
   addMenuItem(opts: MenuItemOptions): Promise<MenuItemHandle>;
   addStoreNavButton(opts: StoreNavButtonOptions): StoreNavButtonHandle;
+  addSuperNavButton(opts: SuperNavButtonOptions): SuperNavButtonHandle;
 }
 ```
 
@@ -545,6 +546,109 @@ sb.plugins.register({
       icon: '<svg viewBox="0 0 14 12"><path fill="currentColor" d="…"/></svg>',
       url: 'https://example.com/catalog',
       placement: 'start',
+    });
+    return () => btn.remove();
+  },
+});
+```
+
+## `addSuperNavButton(opts)` — кнопка в супернаве Steam-клиента
+
+Вставляет постоянную кнопку в верхний main-nav ряд Steam-клиента
+(«Магазин / Библиотека / Сообщество / `<НИК>`»), сразу **после** таба
+`<НИК>` (профиль). Работает напрямую в DOM главной оболочки
+(`ContextKind.Main`), без relay round-trip — поэтому `addSuperNavButton`
+**синхронный**: возвращает handle сразу. В отличие от `addStoreNavButton`
+кнопка **не** навигирует по `url`, а вызывает `onClick`, и несёт на handle
+состояния loading / error / enabled.
+
+**Где доступно.** Только `ContextKind.Main` (супернав — часть клиентской
+оболочки, не страницы магазина). Регистрируйте плагин с
+`contextKinds: [ContextKind.Main]`.
+
+### `SuperNavButtonOptions`
+
+| Поле         | Тип                              | Default            | Описание |
+|--------------|----------------------------------|--------------------|----------|
+| `id`         | `string`                         | —                  | `[a-zA-Z0-9_-]{1,64}` (`MENU_ITEM_ID_RE`). DOM-id кнопки; также ключ CSS-селектора `[data-booster-supernav-btn]`. Валидируется (throws). |
+| `label`      | `string`                         | —                  | Текст кнопки через `textContent` (стиль делает uppercase). 1..120 символов. Валидируется (throws). |
+| `icon?`      | `string`                         | —                  | Inline-SVG или `data:image/*`, рендерится рядом с текстом. SVG **санитайзится** (allowlist тегов/атрибутов) — супернав полу-привилегирован, а `Capability.Ui` доступен сторонним (`approvedPlugins[]`) плагинам. `data:image/*` идёт в `<img>`. Cap 16 КБ. |
+| `placement?` | `'after-profile' \| 'end'`       | **`'after-profile'`** | `'after-profile'` — сразу после таба `<НИК>`; `'end'` — последним ребёнком ряда. |
+| `variant?`   | `'default' \| 'brand'`           | **`'brand'`**      | Фирменный зелёный pill (`#34a37b`, 32px, uppercase). |
+| `onClick`    | `(ctx: { rect: DOMRect }) => void \| Promise<void>` | — | Обработчик клика (навигации по `url` нет). Получает живой `DOMRect` кнопки. Повторный клик, пока предыдущий promise не зарезолвился, игнорируется (busy-guard). |
+
+### `SuperNavButtonHandle`
+
+```ts
+interface SuperNavButtonHandle {
+  remove(): void;
+  setLabel(s: string): void;
+  setEnabled(on: boolean): void;
+  setLoading(on: boolean): void;
+  flashError(): void;
+  getRect(): DOMRect;
+}
+```
+
+- `remove()` останавливает reconcile-loop, отключает `MutationObserver`,
+  снимает user-snapshot-listener, чистит error-таймер и убирает кнопку из
+  DOM. Также срабатывает автоматически на `lifecycle.rollbackAll()`.
+- `setLabel(s)` меняет `textContent` лейбла на месте.
+- `setEnabled(on)` — `false` ставит `aria-disabled="true"` и глушит клики.
+- `setLoading(on)` — показывает спиннер, кнопка читается как disabled и
+  игнорирует клики.
+- `flashError()` подсвечивает кнопку красным на ~1с и возвращает обычный
+  вид.
+- `getRect()` — живой `getBoundingClientRect()` кнопки.
+
+### Durability: структурный якорь по имени, а не CSS-класс
+
+Хэш-классы Steam-клиента меняются при пересборках, а супернав
+перерисовывается React'ом — полагаться на класс, id или геометрию нельзя.
+`addSuperNavButton` ищет таб `<НИК>` **структурно**: сканирует leaf-узлы,
+чей точный `textContent` равен **persona-** или **account-имени**
+пользователя (оба берутся из `user-snapshot` события общего relay-канала
+`sb_cmd`), и поднимается к контейнеру, у которого этот таб соседствует
+минимум с двумя другими tab-подобными детьми. `getBoundingClientRect` не
+используется (happy-dom возвращает нули). См.
+`src/steam-internals/supernav-selectors.ts::findSuperNav`.
+
+Найдя ряд, кнопка держится живой через `MutationObserver` на
+`document.documentElement` (мгновенно ловит React-перерисовку) + форс-poll
+каждые **800мс** (ground-truth re-validation, self-heal начального
+mis-pick). Смена аккаунта (новый `user-snapshot` с другим именем)
+триггерит форс-reconcile, и кнопка переезжает в новый ряд.
+
+### Capability и валидация
+
+Требует `Capability.Ui` — без гранта `ctx.sb.ui === undefined` (см.
+[`./capabilities.md`](./capabilities.md)). `addSuperNavButton` бросает
+**синхронно**, до касания DOM: на невалидный `id`, на пустой или слишком
+длинный `label`, на слишком большой `icon`, на не-функцию `onClick`.
+
+### Пример: кнопка «Оцени аккаунт» в супернаве
+
+```ts
+import { ContextKind, Capability, type PluginContext } from '@steambalance/booster-framework';
+declare const sb: { plugins: { register: (m: unknown) => void } };
+
+sb.plugins.register({
+  id: 'demo-supernav',
+  version: '0.0.1',
+  apiVersion: 1,
+  displayName: 'Super nav button demo',
+  contextKinds: [ContextKind.Main],
+  capabilities: [Capability.Ui],
+  init(ctx: PluginContext): () => void {
+    const btn = ctx.sb.ui.addSuperNavButton({
+      id: 'rate',
+      label: 'Оцени аккаунт',
+      async onClick() {
+        btn.setLoading(true);
+        try { await doWork(); }
+        catch { btn.flashError(); }
+        finally { btn.setLoading(false); }
+      },
     });
     return () => btn.remove();
   },

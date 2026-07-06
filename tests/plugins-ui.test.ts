@@ -1,6 +1,8 @@
 import { test, expect } from 'bun:test';
 import { createPluginUi } from '../src/plugins/ui';
-import type { UiApi, HeaderButtonOptions, AttachedPopupOptions, OpenWindowOptions, OpenExternalWindowOptions, MenuItemOptions, StoreNavButtonOptions } from '../src/api/api-types';
+import { makeUiApi } from '../src/api/ui';
+import { createRegistry } from '../src/registry';
+import type { UiApi, HeaderButtonOptions, AttachedPopupOptions, OpenWindowOptions, OpenExternalWindowOptions, MenuItemOptions, StoreNavButtonOptions, SuperNavButtonOptions } from '../src/api/api-types';
 
 interface CapturedCalls {
   headerButton?: HeaderButtonOptions;
@@ -9,6 +11,7 @@ interface CapturedCalls {
   externalWindow?: OpenExternalWindowOptions;
   menuItem?: MenuItemOptions;
   storeNav?: StoreNavButtonOptions;
+  superNav?: SuperNavButtonOptions;
 }
 
 function makeMockUi(captured: CapturedCalls): UiApi {
@@ -19,6 +22,7 @@ function makeMockUi(captured: CapturedCalls): UiApi {
     openExternalWindow: async (o) => { captured.externalWindow = o; return {} as never; },
     addMenuItem: async (o) => { captured.menuItem = o; return { remove: () => {} }; },
     addStoreNavButton: (o) => { captured.storeNav = o; return { remove: () => {}, setLabel: () => {} }; },
+    addSuperNavButton: (o) => { captured.superNav = o; return { remove: () => {}, setLabel: () => {}, setEnabled: () => {}, setLoading: () => {}, flashError: () => {}, getRect: () => new DOMRect() }; },
   };
 }
 
@@ -63,6 +67,22 @@ test('addStoreNavButton auto-prefixes id', () => {
   const wrapped = createPluginUi(makeMockUi(captured), 'booster-addfunds');
   wrapped.addStoreNavButton({ id: 'booster-catalog-nav', label: 'Каталог игр', url: 'https://example.com/x', variant: 'brand' }); // strings-allow-cyrillic
   expect(captured.storeNav?.id).toBe('booster-addfunds__booster-catalog-nav');
+});
+
+test('addSuperNavButton auto-prefixes id', () => {
+  const captured: CapturedCalls = {};
+  const wrapped = createPluginUi(makeMockUi(captured), 'booster-rateaccount');
+  wrapped.addSuperNavButton({ id: 'button', label: 'x', onClick: () => {} });
+  expect(captured.superNav?.id).toBe('booster-rateaccount__button');
+});
+
+test('createPluginUi wraps every real UiApi method (surface completeness)', () => {
+  const reg = createRegistry();
+  const realKeys = Object.keys(makeUiApi(reg, { call: async () => ({}) } as never));
+  const wrapped = createPluginUi(makeMockUi({}), 'p');
+  for (const k of realKeys) expect(typeof (wrapped as never as Record<string, unknown>)[k]).toBe('function');
+  expect(realKeys).toContain('addSuperNavButton');
+  reg.rollbackAll();
 });
 
 test('invalid user id is rejected (path-traversal characters)', () => {

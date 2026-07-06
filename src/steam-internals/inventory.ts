@@ -14,9 +14,19 @@ const PAGE_SIZE = 2000;
 
 export interface InventoryDeps {
   resolveStub: () => { GetInventoryItemsWithDescriptions: (transport: unknown, req: unknown) => Promise<any> } | undefined;
-  resolveReqMsg: () => unknown | undefined;
-  resolveWrap: () => { Init: (reqMsg: unknown) => { Body: () => any } } | undefined;
   getTransport: () => unknown | undefined;
+}
+
+/** Request shape the current-client ServiceMethod stub accepts directly (plain
+ *  object). Field names are the protobuf snake_case names. */
+interface InventoryRequest {
+  steamid: string | undefined;
+  appid: number;
+  contextid: string;
+  get_descriptions: boolean;
+  language: string;
+  count: number;
+  start_assetid?: string;
 }
 
 interface Options { apps?: AppContext[]; maxItemsPerApp?: number; includeIcons?: boolean; }
@@ -44,14 +54,12 @@ export async function fetchInventoryWithDeps(options: Options, deps: InventoryDe
   const maxPerApp = options.maxItemsPerApp ?? DEFAULT_MAX_PER_APP;
   const includeIcons = !!options.includeIcons;
   const stub = deps.resolveStub();
-  const ReqMsg = deps.resolveReqMsg();
-  const Wrap = deps.resolveWrap();
   const transport = deps.getTransport();
   const items: InventoryItem[] = [];
   const perApp: InventoryAppResult[] = [];
   let partial = false;
 
-  if (!stub || !ReqMsg || !Wrap || !transport) {
+  if (!stub || !transport) {
     nativeWarn('[sb] inventory: CM machinery unavailable');
     return { items: [], perApp: apps.map((a) => ({ ...a, fetched: 0, ok: false, error: 'inventory machinery unavailable' })), partial: true };
   }
@@ -66,13 +74,18 @@ export async function fetchInventoryWithDeps(options: Options, deps: InventoryDe
     let fetched = 0, totalCount: number | undefined, start: string | undefined, ok = true, err: string | undefined;
     try {
       for (;;) {
-        const r = Wrap.Init(ReqMsg);
-        const b = r.Body();
-        b.set_steamid(steamId);
-        b.set_appid(app.appid); b.set_contextid(app.contextid); b.set_get_descriptions(true);
-        b.set_language('russian'); b.set_count(PAGE_SIZE);
-        if (start) b.set_start_assetid(start);
-        const resp = await stub.GetInventoryItemsWithDescriptions(transport, r);
+        // Current-client convention: pass a plain request object straight to the
+        // stub (mirrors account-level.ts::cmLevel). The older Steam bundle wrapped
+        // it via `Wrap.Init(ReqMsg).Body().set_*()`; that protobuf codegen (with
+        // `set_field` setters) is gone in current builds — the message classes now
+        // only carry `toObject/fromObject/serializeBinary`, so the setter path
+        // silently resolved to nothing and every app reported "machinery unavailable".
+        const req: InventoryRequest = {
+          steamid: steamId, appid: app.appid, contextid: app.contextid,
+          get_descriptions: true, language: 'russian', count: PAGE_SIZE,
+        };
+        if (start) req.start_assetid = start;
+        const resp = await stub.GetInventoryItemsWithDescriptions(transport, req);
         const er = resp.GetEResult(); if (er !== 1) { ok = false; err = `eresult ${er}`; partial = true; break; }
         const body = resp.Body().toObject();
         totalCount = body.total_inventory_count;
@@ -95,26 +108,22 @@ export async function fetchInventoryWithDeps(options: Options, deps: InventoryDe
 
 /** Production entry: resolve live globals + webpack handles, then delegate.
  *
- *  Resolution notes (tuned LIVE against the running Steam client):
- *  - stub:   the export of the Econ-route module that owns the
- *            `GetInventoryItemsWithDescriptions` method.
- *  - ReqMsg: the request-message CLASS from the same module. Its prototype
- *            carries `set_steamid` (a request-only field — the response
- *            message has no steamid setter), which distinguishes it from the
- *            response class living in the same module.
- *  - Wrap:   the generic ServiceMethod message wrapper class whose `Init(MsgClass)`
- *            returns a holder exposing `.Body()` (field setters) and, on the
- *            response, `.GetEResult()`. The module is pinned by the distinctive
- *            `InitFromMsg` + `InitFromObject` + `GetEResult` triple (matches one
- *            module live; a bare `'Init('` / `'Body()'` triple matches ~20), and
- *            the export by three of its static initializers (`Init`,
- *            `InitFromMsg`, `InitFromObject`). Verified live: stub=tB,
- *            reqMsg=z9, wrap=w. */
+ *  Resolution notes (verified LIVE against the running Steam client via CDP):
+ *  - stub:      the export of the Econ-route module that owns the
+ *               `GetInventoryItemsWithDescriptions(transport, request)` method
+ *               (an object export, not a class — matched by the method's presence).
+ *  - transport: `g_FriendsUIApp.CMInterface.GetServiceTransport()`.
+ *
+ *  The request is a PLAIN object (protobuf snake_case fields) passed straight to
+ *  the stub, and the response exposes `GetEResult()` + `Body().toObject()`. This
+ *  is the same call convention `account-level.ts::cmLevel` uses and the only one
+ *  the current client supports: the previous `Wrap.Init(ReqMsg).Body().set_*()`
+ *  message-builder machinery relied on a protobuf codegen (with `set_field`
+ *  setters) that current Steam builds no longer ship — its `ReqMsg`/`Wrap`
+ *  handles resolved to nothing, so every app fell into "machinery unavailable". */
 export async function fetchInventory(options: Options = {}): Promise<InventoryResult> {
   const deps: InventoryDeps = {
     resolveStub: () => pickExport(resolveModuleByContent(ECON_ROUTE), (v) => !!v && typeof (v as any).GetInventoryItemsWithDescriptions === 'function') as any,
-    resolveReqMsg: () => pickExport(resolveModuleByContent(ECON_ROUTE), (v) => typeof v === 'function' && !!(v as any).prototype && typeof (v as any).prototype.set_steamid === 'function'),
-    resolveWrap: () => pickExport(resolveModuleByContent(['InitFromMsg', 'InitFromObject', 'GetEResult']), (v) => typeof v === 'function' && typeof (v as any).Init === 'function' && typeof (v as any).InitFromMsg === 'function' && typeof (v as any).InitFromObject === 'function') as any,
     getTransport: () => {
       const cm = (window as any).g_FriendsUIApp?.CMInterface;
       try { return typeof cm?.GetServiceTransport === 'function' ? cm.GetServiceTransport() : undefined; } catch { return undefined; }

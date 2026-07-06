@@ -30,7 +30,7 @@ export const Capability = {
 
 | Capability   | Gated API           | Чем пользуется плагин                                            |
 |--------------|---------------------|------------------------------------------------------------------|
-| `Ui`         | `ctx.sb.ui`         | `addHeaderButton`, `attachPopup`, `openWindow`, `openExternalWindow`, `addMenuItem`, `addStoreNavButton`. |
+| `Ui`         | `ctx.sb.ui`         | `addHeaderButton`, `attachPopup`, `openWindow`, `openExternalWindow`, `addMenuItem`, `addStoreNavButton`, `addSuperNavButton`. |
 | `Steam`      | `ctx.sb.steam`      | `openUrl`, `getCurrentUser`, `getCurrentUserAsync`, `onUserChange`, `getStoreCountry`. |
 | `Configs`    | `ctx.sb.configs` И `ctx.configs` | Encrypted JSON-storage `read`/`write` по имени, per-plugin namespace. |
 | `Bus`        | `ctx.sb.bus`        | Cross-target pub/sub `publish`/`subscribe`.                      |
