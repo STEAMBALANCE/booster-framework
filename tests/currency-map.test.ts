@@ -44,6 +44,43 @@ describe('deriveCurrency: extended set', () => {
   });
 });
 
+describe('deriveCurrency: ISO-code disambiguation (dollar family)', () => {
+  // Steam disambiguates the ambiguous `$` glyph by appending the ISO code to
+  // the amount, e.g. real USD wallet: "$0.00 USD". Stripping separators leaves
+  // "$USD" (not a symbol-map key), so the trailing ISO code must be honored.
+  test('USD from "$0.00 USD" (real Steam USD wallet format)', () => {
+    expect(deriveCurrency('$0.00 USD')).toBe('USD');
+  });
+  test('USD from "$1,234.56 USD" (grouped)', () => {
+    expect(deriveCurrency('$1,234.56 USD')).toBe('USD');
+  });
+  test('USD from space-less suffix "$0.00USD"', () => {
+    expect(deriveCurrency('$0.00USD')).toBe('USD');
+  });
+  test('USD still works without ISO suffix: "$1.50"', () => {
+    expect(deriveCurrency('$1.50')).toBe('USD');
+  });
+  test('CLP$ prefix, no suffix: "CLP$ 1.000" → CLP (symbol path)', () => {
+    expect(deriveCurrency('CLP$ 1.000')).toBe('CLP');
+  });
+  // "COL" is NOT a valid ISO code (Colombian peso is COP). The trailing-anchor
+  // must reach past the non-ISO "COL$" prefix to the real trailing "COP" code,
+  // NOT abandon the ISO path on the first triad (regression guard for the
+  // first-match-anywhere hazard).
+  test('COL$ prefix + trailing COP: "COL$ 1.000 COP" → COP', () => {
+    expect(deriveCurrency('COL$ 1.000 COP')).toBe('COP');
+  });
+  test('COL$ prefix, no suffix: "COL$ 1.000" → COP (symbol path)', () => {
+    expect(deriveCurrency('COL$ 1.000')).toBe('COP');
+  });
+  // Only the TRAILING code is authoritative — a symbol-only balance whose
+  // string does not end in a known ISO code stays on the symbol-strip path.
+  test('trailing-anchored: mid-string code does not override symbol', () => {
+    // Steam never emits this, but it pins the invariant: no positional override.
+    expect(deriveCurrency("CHF 1'234.56")).toBe('CHF');  // ends in digits → symbol path
+  });
+});
+
 describe('deriveCurrency: separator handling', () => {
   test('thin-space (U+2009) handled', () => {
     expect(deriveCurrency('1 000,00₸')).toBe('KZT');  // U+2009 thin-space

@@ -49,6 +49,12 @@ export const CURRENCY_BY_SYMBOL: Record<string, string> = {
   'R':    'ZAR',  // single-letter; BRL "R$" matched first (full-string lookup)
 };
 
+/** Valid ISO 4217 codes we recognize — the value set of the symbol map.
+ *  Used to honor an explicit ISO code Steam appends for disambiguation
+ *  (e.g. USD "$0.00 USD") without matching lookalikes ("COL$" → the "COL"
+ *  token is not a real code, so it stays a symbol lookup → COP). */
+const KNOWN_ISO_CODES = new Set(Object.values(CURRENCY_BY_SYMBOL));
+
 /** Steam balance separators stripped before symbol lookup.
  *  Explicit Unicode escapes for non-ASCII whitespace so the literal
  *  codepoints aren't lost in editors that render NBSP / thin-space /
@@ -67,6 +73,18 @@ const SEPARATORS_RE = /[\d,. '\u00A0\u2009\u202F]/g;
  *  match no map entry after stripping. */
 export function deriveCurrency(formattedBalance: string): string | undefined {
   if (!formattedBalance) return undefined;
+  // The `$` glyph is ambiguous (USD/CAD/AUD/…), so Steam appends the ISO code
+  // as a suffix on dollar-family wallets: real USD reads "$0.00 USD". Honor a
+  // *trailing* known code — that's the one position Steam uses to disambiguate,
+  // and a balance/price string that ends in an ISO code ends in its OWN code.
+  // Anchoring to the end (rather than first-match anywhere) avoids two traps:
+  //   • a non-ISO 3-letter prefix like "COL$" shadowing a real trailing code
+  //     ("COL$ 1.000 COP" must resolve COP, not abandon the ISO path);
+  //   • a code embedded mid-string overriding the actual symbol.
+  // `[^A-Z]?` before the triad tolerates the no-separator form ("$0.00USD")
+  // while still rejecting a triad glued to a longer uppercase run.
+  const isoMatch = formattedBalance.match(/(?:^|[^A-Z])([A-Z]{3})\s*$/);
+  if (isoMatch && KNOWN_ISO_CODES.has(isoMatch[1]!)) return isoMatch[1]!;
   const stripped = formattedBalance.replace(SEPARATORS_RE, '');
   return CURRENCY_BY_SYMBOL[stripped];
 }
