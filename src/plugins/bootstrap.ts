@@ -164,11 +164,11 @@ export function filterEligiblePlugins(args: {
  * returns — each call is a fresh V8 task, so microtasks drain between
  * them. Without a wait step, drain fires before any plugin's
  * sb.plugins.register has run and produces zero outcomes (silent failure:
- * no buttons / no init hooks). Polling at 10 ms with a 1 s ceiling closes
+ * no buttons / no init hooks). Polling at 10 ms with a 2 s ceiling closes
  * the race while staying invisible to fast happy paths (registry catches
  * up within the first poll on a healthy local CDP).
  */
-const PLUGIN_REGISTER_WAIT_MAX_MS = 1000;
+const PLUGIN_REGISTER_WAIT_MAX_MS = 2000;
 const PLUGIN_REGISTER_POLL_MS = 10;
 async function waitForExpectedRegistrations(
   registry: PluginRegistry,
