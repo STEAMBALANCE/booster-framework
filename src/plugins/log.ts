@@ -42,11 +42,12 @@ export function createPluginLog(pluginId: string, notify: NotifyFn): LogApi {
     notify('log', pluginId, { level, msg, meta });
   }
 
-  return Object.freeze({
+  const api: LogApi = {
     trace: (msg, meta) => emit('trace', msg, meta),
     debug: (msg, meta) => emit('debug', msg, meta),
     info:  (msg, meta) => emit('info',  msg, meta),
     warn:  (msg, meta) => emit('warn',  msg, meta),
     error: (msg, meta) => emit('error', msg, meta),
-  });
+  };
+  return Object.freeze(api);
 }
