@@ -1,6 +1,6 @@
 {
   "name": "@steambalance/booster-framework",
-  "version": "0.0.25",
+  "version": "1.0.0",
   "description": "Generic Steam client extension framework — public API surface for booster-plugin authors.",
   "license": "MIT",
   "repository": {
