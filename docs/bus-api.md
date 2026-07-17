@@ -21,8 +21,11 @@ interface BusApi {
 нативный broadcaster → `Runtime.evaluate` в каждом target session'е).
 
 **Где доступно.** Во всех `ContextKind`. Topic-broadcast достигает всех
-**других** target'ов с подпиской на topic; сам publisher свой broadcast
-не получает (no self-loop).
+**других** target'ов с подпиской на topic, а также (local-echo, на
+микротаске) собственных подписчиков того же `makeBusApi`-инстанса —
+нативный fanout пропускает сессию отправителя, поэтому без local-echo
+два подписчика в одном и том же target'е (например, оба на `Main`)
+никогда бы не увидели publish друг друга.
 
 ## `publish(topic, data?)`
 
@@ -97,15 +100,25 @@ promise rejection.
 ### Delivery semantics
 
 - **Cross-target.** Broadcast уходит во все **другие** session'ы (main,
-  shared, tabbedBrowser, web) — всем, кто подписан.
-- **No self-loop.** Sender не получает свой собственный publish (см.
-  `BusBroadcaster::Publish` в C++ — sender_session_id отфильтровывается).
-  Если нужно «вызвать собственный handler» — вызывайте функцию напрямую,
-  не через bus.
+  shared, tabbedBrowser, web) — всем, кто подписан. Это делает нативный
+  `BusBroadcaster::Publish` в C++, который отфильтровывает
+  `sender_session_id` — свою же сессию он не трогает, этот пробел
+  закрывает local-echo (см. ниже).
+- **Local-echo.** Publisher **тоже** получает свой broadcast — но только
+  собственные подписчики того же `makeBusApi`-инстанса (`subscribe`,
+  вызванный в этом же контексте). Доставка **асинхронная**, на
+  микротаске (`queueMicrotask`), а не синхронная, как для
+  кросс-сессионного broadcast — так `publish(...)` не может
+  reentrant-вызвать локальный `subscribe`-callback прямо у себя внутри.
+  Дублирования нет: нативный fanout по-прежнему пропускает сессию
+  отправителя, local-echo закрывает именно этот пробел, а не дублирует
+  cross-target доставку.
 - **Fire-and-forget.** Bridge errors логируются через `nativeWarn`, но
   publish-promise не пробрасывается caller'у (publish — `void`).
 - **Не reliable.** Если target ещё не загрузился или уже rollback'нут —
-  его подписчики этот broadcast не получат. Нет re-delivery / queue.
+  его подписчики этот broadcast не получат. Нет re-delivery / queue —
+  это про **cross-target** доставку; local-echo к собственным
+  подписчикам того же инстанса срабатывает всегда, пока подписка жива.
 
 ### Re-entry safety
 
@@ -154,8 +167,11 @@ Behavior: ошибку **видно** в DevTools / nativeWarn, остальны
 ### Sync delivery
 
 `cb` вызывается **синхронно** в момент диспатча (внутри
-`__sb_bus_dispatch`, C++ инжектит этот call в target session). Если
-handler'у нужна async работа — оберните в IIFE / queueMicrotask:
+`__sb_bus_dispatch`, C++ инжектит этот call в target session) — это
+касается **кросс-сессионной** доставки. Для local-echo (см. «Delivery
+semantics» выше) доставка своим же подписчикам всегда асинхронная, на
+микротаске, независимо от этого. Если handler'у нужна async работа —
+оберните в IIFE / queueMicrotask:
 
 ```ts
 ctx.sb.bus.subscribe('feed.refresh', (data) => {
@@ -200,21 +216,30 @@ Best practices:
 
 ## Cross-context reachability
 
-Publishing context | Reachable subscribers
+Publishing context | Reachable subscribers (cross-session, нативный fanout)
 -------------------|------------------------
-`Main`             | `Shared`, `TabbedBrowser`, `Web` (но не самого `Main`)
+`Main`             | `Shared`, `TabbedBrowser`, `Web`
 `Shared`           | `Main`, `TabbedBrowser`, `Web`
 `TabbedBrowser`    | `Main`, `Shared`, `Web`, другие `TabbedBrowser` окна
 `Web`              | `Main`, `Shared`, `TabbedBrowser`, другие `Web` страницы
 
+**Плюс, независимо от контекста — local-echo.** Publisher всегда
+доставляет publish собственным подписчикам того же `makeBusApi`-инстанса
+(например, второй плагин, подписанный на том же `Main`), асинхронно на
+микротаске. Таблица выше описывает только кросс-сессионный fanout —
+local-echo к ней не относится и работает поверх него.
+
 C++ broadcaster знает только session'ы — он рассылает в **все active
 session'ы** кроме `sender_session_id`. То есть два инстанса одного
-плагина в `Web` (на разных страницах) **видят** publish друг друга.
-Это полезно для координации между tab'ами.
+плагина в `Web` (на разных страницах) **видят** publish друг друга через
+этот cross-session fanout. Это полезно для координации между tab'ами.
 
-> **Внутри одного V8-контекста** publish не доставляется (см. no
-> self-loop). Если плагин в `Main` хочет послать event самому себе —
-> вызовите функцию напрямую, не через bus.
+> **Внутри одного V8-контекста** (тот же экземпляр `makeBusApi`) publish
+> **теперь доставляется** — см. local-echo выше. Доставка асинхронная
+> (микротаска), в отличие от синхронного диспатча для кросс-сессионного
+> broadcast (см. «Sync delivery»). Раньше этот раздел советовал «вызывайте
+> функцию напрямую, не через bus» для self-notify — начиная с local-echo
+> это больше не нужно, self-publish работает штатно.
 
 ## Cleanup
 

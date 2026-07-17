@@ -228,4 +228,36 @@ describe('makeBusApi', () => {
     expect(String(payload.args.msg)).toContain('never-subscribed-topic');
     scope._abort();
   });
+
+  test('publish delivers to same-instance local subscribers (local echo, C1)', async () => {
+    const bridge = fakeBridge();
+    const scope = createScope();
+    const bus = makeBusApi(scope, bridge);
+    const received: any[] = [];
+    bus.subscribe('booster-checkout.keys.external-purchase', (d) => received.push(d));
+    bus.publish('booster-checkout.keys.external-purchase', { reqId: 'x1' });
+    expect(received).toEqual([]);          // delivered on a microtask, not synchronously
+    await Promise.resolve();                // flush the microtask
+    expect(received).toEqual([{ reqId: 'x1' }]);
+    expect(bridge.calls.length).toBe(1);   // still forwarded to native for other sessions
+    scope._abort();
+  });
+
+  test('publish local-echo does NOT warn on unmatched local topic (no spam)', async () => {
+    const bridge = fakeBridge();
+    const scope = createScope();
+    const bus = makeBusApi(scope, bridge);
+    const origNative = (globalThis as any).__sb_native;
+    const nativeCalls: string[] = [];
+    (globalThis as any).__sb_native = (s: string) => { nativeCalls.push(s); };
+    try {
+      bus.publish('nobody.listens.here', { v: 1 });   // no local subscriber
+      await Promise.resolve();
+    } finally {
+      (globalThis as any).__sb_native = origNative;
+    }
+    const warns = nativeCalls.filter((s) => s.includes('unmatched topic'));
+    expect(warns.length).toBe(0);
+    scope._abort();
+  });
 });

@@ -763,16 +763,20 @@ export interface PagesApi {
 }
 
 export interface BusApi {
-  /** Broadcast `data` to all OTHER injected targets that subscribed to `topic`.
-   *  Sender (this target) does NOT receive its own publish (no self-loop).
+  /** Broadcast `data` to all OTHER injected targets that subscribed to `topic`,
+   *  AND (on a microtask, local-echo) to this same instance's own local
+   *  subscribers to `topic` — the native fanout skips the sender session, so
+   *  two subscribers co-located in the same target/session (e.g. Main) would
+   *  otherwise never hear each other.
    *  Sync throw on:
    *    - invalid topic (regex /^[a-z][a-z0-9.\-]{0,63}$/)
    *    - payload >16KB после JSON.stringify
    *    - data not JSON-serializable */
   publish(topic: string, data?: unknown): void;
 
-  /** Subscribe к topic. cb fires synchronously when broadcast arrives
-   *  from another target. Errors thrown by cb are caught and logged via
+  /** Subscribe к topic. cb fires synchronously when a broadcast arrives
+   *  from another target, and asynchronously (on a microtask) for a
+   *  same-instance publish via local-echo (see `publish`). Errors thrown by cb are caught and logged via
    *  `console.error` (do not propagate — a faulty subscriber must not
    *  starve other subscribers on the same topic). Returns unsubscribe.
    *  scope.abort drops all subs automatically.

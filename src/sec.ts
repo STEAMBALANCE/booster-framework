@@ -27,6 +27,12 @@ export interface SecContext {
    *  host.getRateAccountData handler can reach it without relying on the
    *  minimal window.sb facade. */
   rateAccountData?: string;
+  /** Per-launch secret name for the JS keys-purchase global. When set, the
+   *  main-shell bootstrap registers `window[keysPurchase]` as a non-enumerable
+   *  delegate that forwards a catalogue purchase to booster-checkout over
+   *  sb.bus and awaits the result, so the native host.purchaseKey handler can
+   *  reach it without the minimal window.sb facade. */
+  keysPurchase?: string;
 }
 
 export function readAndConsumeSec(): SecContext {
@@ -54,6 +60,9 @@ export function readAndConsumeSec(): SecContext {
   const rateAccountData = typeof secObj['rateAccountData'] === 'string'
     ? secObj['rateAccountData']
     : undefined;
+  const keysPurchase = typeof secObj['keysPurchase'] === 'string'
+    ? secObj['keysPurchase']
+    : undefined;
   delete obj['_sec'];
-  return { frameworkToken, resolverName, busDispatchName, relaySecret, keysActivate, rateAccountData };
+  return { frameworkToken, resolverName, busDispatchName, relaySecret, keysActivate, rateAccountData, keysPurchase };
 }

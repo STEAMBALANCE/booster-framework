@@ -21,6 +21,7 @@ import { reportUserBinding } from './report-user-binding';
 import { prefetchSetupId } from './prefetch-setup-id';
 import { readAndConsumeSec } from './sec';
 import { collectRatePayload } from './rate-account';
+import { makeExternalPurchase } from './external-purchase';
 import type { SbApi } from './api/api-types';
 
 declare const __SB_FRAMEWORK_VERSION__: string;
@@ -243,6 +244,21 @@ declare global {
   if (sec.rateAccountData) {
     Object.defineProperty(window, sec.rateAccountData, {
       value: () => collectRatePayload(api, Date.now()),
+      enumerable: false,
+      configurable: true,
+      writable: false,
+    });
+  }
+
+  // Register the per-launch secret keys-purchase fn. The injector emits
+  // _sec.keysPurchase so the native host.purchaseKey handler can forward a
+  // catalogue purchase (itemId + optional gameName) to booster-checkout over
+  // sb.bus and await the result, without the minimal window.sb facade.
+  // Non-enumerable so it doesn't appear in Object.keys(window) scans.
+  if (sec.keysPurchase) {
+    const externalPurchase = makeExternalPurchase(api);
+    Object.defineProperty(window, sec.keysPurchase, {
+      value: (itemId: unknown, gameName?: unknown) => externalPurchase(itemId, gameName),
       enumerable: false,
       configurable: true,
       writable: false,

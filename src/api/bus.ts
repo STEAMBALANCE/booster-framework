@@ -28,9 +28,32 @@ export function makeBusApi(scope: ScopeApi, bridge: Bridge, dispatchName?: strin
   // overwrites of window.__sb_bus_dispatch. Fall back to the legacy global
   // name when not provided (back-compat for pre-B4 injectors / tests).
   const _dispatchName = dispatchName ?? '__sb_bus_dispatch';
-  const _dispatchFn = (topic: string, data: unknown) => {
+  // Deliver to THIS context's local subscribers only. No unmatched-topic warn:
+  // used both by the native fanout path (via _dispatchFn) and by publish's
+  // local-echo (C1) — a publish whose own context has no subscriber is normal,
+  // not a typo, so it must stay silent.
+  const deliverLocal = (topic: string, data: unknown) => {
     const set = subscribers.get(topic);
-    if (!set) {
+    if (!set) return;
+    for (const cb of set) {
+      try { cb(data); }
+      catch (e) {
+        // Errors in subscriber callbacks must NOT propagate — they would
+        // halt the dispatch loop and starve other subscribers of this
+        // topic. Log via console.error so a faulty subscriber surfaces
+        // in dev/prod telemetry instead of silently dropping events.
+        // Was a `// swallow` no-op pre-2026-05-21 — see code-review
+        // I-2/I-5 from that day.
+        console.error(`[sb.bus] subscriber threw for topic '${topic}'`, e);
+      }
+    }
+  };
+  // Native broadcast entry-point. C++ calls this on each target via
+  // window["<dispatchName>"](...). Keeps the dev-only unmatched-topic warn —
+  // a remote broadcast for a topic nobody here subscribed to is a likely
+  // publish/subscribe typo across targets.
+  const _dispatchFn = (topic: string, data: unknown) => {
+    if (!subscribers.get(topic)) {
       // Dev-only diagnostic: a remote broadcast arrived for a topic this
       // target never subscribed to. Common cause is a typo in publish /
       // subscribe pairing across targets. Dead-code-eliminated in prod
@@ -47,18 +70,7 @@ export function makeBusApi(scope: ScopeApi, bridge: Bridge, dispatchName?: strin
       }
       return;
     }
-    for (const cb of set) {
-      try { cb(data); }
-      catch (e) {
-        // Errors in subscriber callbacks must NOT propagate — they would
-        // halt the dispatch loop and starve other subscribers of this
-        // topic. Log via console.error so a faulty subscriber surfaces
-        // in dev/prod telemetry instead of silently dropping events.
-        // Was a `// swallow` no-op pre-2026-05-21 — see code-review
-        // I-2/I-5 from that day.
-        console.error(`[sb.bus] subscriber threw for topic '${topic}'`, e);
-      }
-    }
+    deliverLocal(topic, data);
   };
   // Register the dispatch function. When a per-launch secret name is given,
   // install non-enumerable+configurable via defineProperty so a plugin can't
@@ -97,6 +109,14 @@ export function makeBusApi(scope: ScopeApi, bridge: Bridge, dispatchName?: strin
         throw new Error(`sb.bus.publish: payload too large (${byteLen} > ${MAX_PAYLOAD_BYTES})`);
       bridge.call('bus.publish', { topic, data: data ?? null })
         .catch(e => nativeWarn('sb.bus.publish failed', { topic, error: String(e) }));
+      // Local-echo (C1): the native BusBroadcaster skips the sender session
+      // (injector/src/ipc/bus.cpp:83), so a same-session subscriber — e.g. the
+      // host-bridge purchaseKey delegate and booster-checkout both on Main —
+      // would never receive this publish. Deliver to our own local subscribers
+      // on a microtask (mirrors the native path's async nature; avoids
+      // reentrancy). Native still fans out to the OTHER sessions, so there is
+      // no double delivery.
+      queueMicrotask(() => deliverLocal(topic, data ?? null));
     },
 
     subscribe(topic: string, cb: (data: unknown) => void): () => void {

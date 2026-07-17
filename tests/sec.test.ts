@@ -59,3 +59,14 @@ describe('readAndConsumeSec', () => {
     expect(sec).toEqual({});
   });
 });
+
+describe('readAndConsumeSec: keysPurchase', () => {
+  it('returns keysPurchase when present in _sec', () => {
+    setManifest({ frameworkToken: 'tok', keysPurchase: 'sb_purchase001' });
+    expect(readAndConsumeSec().keysPurchase).toBe('sb_purchase001');
+  });
+  it('returns undefined keysPurchase when absent from _sec', () => {
+    setManifest({ frameworkToken: 'tok' });
+    expect(readAndConsumeSec().keysPurchase).toBeUndefined();
+  });
+});
