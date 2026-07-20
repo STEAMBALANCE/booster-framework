@@ -73,18 +73,20 @@ const SEPARATORS_RE = /[\d,. '\u00A0\u2009\u202F]/g;
  *  match no map entry after stripping. */
 export function deriveCurrency(formattedBalance: string): string | undefined {
   if (!formattedBalance) return undefined;
-  // The `$` glyph is ambiguous (USD/CAD/AUD/…), so Steam appends the ISO code
-  // as a suffix on dollar-family wallets: real USD reads "$0.00 USD". Honor a
-  // *trailing* known code — that's the one position Steam uses to disambiguate,
-  // and a balance/price string that ends in an ISO code ends in its OWN code.
-  // Anchoring to the end (rather than first-match anywhere) avoids two traps:
-  //   • a non-ISO 3-letter prefix like "COL$" shadowing a real trailing code
-  //     ("COL$ 1.000 COP" must resolve COP, not abandon the ISO path);
-  //   • a code embedded mid-string overriding the actual symbol.
-  // `[^A-Z]?` before the triad tolerates the no-separator form ("$0.00USD")
-  // while still rejecting a triad glued to a longer uppercase run.
-  const isoMatch = formattedBalance.match(/(?:^|[^A-Z])([A-Z]{3})\s*$/);
-  if (isoMatch && KNOWN_ISO_CODES.has(isoMatch[1]!)) return isoMatch[1]!;
+  // The `$` glyph is ambiguous (USD/CAD/AUD/…), so Steam appends the ISO code to
+  // dollar-family wallets — but WHERE and in what case varies by locale. Real US
+  // reads "$0.00 USD" (suffix), a Belarus USD wallet can format it as a prefix
+  // ("USD 0,00") or lowercase. Honor a standalone 3-letter token that IS a known
+  // ISO code, in ANY position, case-insensitively; first known code wins.
+  //   • The token must be delimited by non-letters, so "COL$" (COL isn't a real
+  //     code) is skipped and the symbol path resolves it to COP; and a triad
+  //     glued to a longer run ("USDT") never false-matches.
+  //   • Steam's symbol and appended code always describe the SAME currency, so a
+  //     positional-any match can't conflict with the symbol path.
+  for (const m of formattedBalance.matchAll(/(?:^|[^A-Za-z])([A-Za-z]{3})(?![A-Za-z])/g)) {
+    const code = m[1]!.toUpperCase();
+    if (KNOWN_ISO_CODES.has(code)) return code;
+  }
   const stripped = formattedBalance.replace(SEPARATORS_RE, '');
   return CURRENCY_BY_SYMBOL[stripped];
 }

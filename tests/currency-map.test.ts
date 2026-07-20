@@ -73,11 +73,31 @@ describe('deriveCurrency: ISO-code disambiguation (dollar family)', () => {
   test('COL$ prefix, no suffix: "COL$ 1.000" → COP (symbol path)', () => {
     expect(deriveCurrency('COL$ 1.000')).toBe('COP');
   });
-  // Only the TRAILING code is authoritative — a symbol-only balance whose
-  // string does not end in a known ISO code stays on the symbol-strip path.
-  test('trailing-anchored: mid-string code does not override symbol', () => {
-    // Steam never emits this, but it pins the invariant: no positional override.
-    expect(deriveCurrency("CHF 1'234.56")).toBe('CHF');  // ends in digits → symbol path
+  // A known ISO code is honored in ANY position — some locales prefix it or
+  // don't end the string with it. CHF resolves the same either way.
+  test('prefix ISO code is honored: "CHF 1\'234.56" → CHF', () => {
+    expect(deriveCurrency("CHF 1'234.56")).toBe('CHF');
+  });
+
+  // Belarus wallets are USD; the client may format the balance in ways the
+  // trailing-only match missed. These are the real-world variants that must all
+  // resolve USD (screenshot showed "$0.00 USD" on a Belarus account).
+  test('USD from "$0.00 USD" (Belarus account, screenshot format)', () => {
+    expect(deriveCurrency('$0.00 USD')).toBe('USD');
+    expect(deriveCurrency('$0,00 USD')).toBe('USD');   // comma decimal locale
+  });
+  test('USD from a PREFIX ISO code: "USD 0,00" / "USD 5.00"', () => {
+    expect(deriveCurrency('USD 0,00')).toBe('USD');
+    expect(deriveCurrency('USD 5.00')).toBe('USD');
+  });
+  test('USD from a lowercase/mixed-case ISO code: "$0.00 usd"', () => {
+    expect(deriveCurrency('$0.00 usd')).toBe('USD');
+    expect(deriveCurrency('5,00 Usd')).toBe('USD');
+  });
+  test('non-ISO 3-letter prefix is NOT falsely matched: "COL$ 1.000" → COP', () => {
+    // "COL" isn't a real ISO code (Colombian peso is COP); must fall through to
+    // the symbol path, not resolve to some bogus code.
+    expect(deriveCurrency('COL$ 1.000')).toBe('COP');
   });
 });
 
