@@ -96,3 +96,49 @@ test('fetchInventory returns machinery-unavailable when stub or transport missin
   const noTransport = await fetchInventoryWithDeps({ apps: [{ appid: 753, contextid: '6' }] }, { resolveStub: () => ({ GetInventoryItemsWithDescriptions: async () => ({}) }), getTransport: () => undefined } as any);
   expect(noTransport.perApp[0].ok).toBe(false);
 });
+
+// Regression: DEFAULT_MAX_PER_APP was equal to PAGE_SIZE (both 2000), so
+// `fetched >= maxPerApp` tripped the moment the first full page landed and the
+// second page was never requested. Pagination existed but never ran at
+// defaults — the exact case of a card-heavy 753/6 inventory.
+test('paginates past the first full page at DEFAULT options', async () => {
+  const page = (n: number, start: number) => ({
+    assets: Array.from({ length: n }, (_, i) => ({ assetid: `a${start + i}`, classid: 'c1', instanceid: 'i1', amount: '1' })),
+    descriptions: [{ classid: 'c1', instanceid: 'i1', market_hash_name: 'Card', marketable: 1, tradable: 1 }],
+  });
+  const deps = makeDeps({
+    '0':     { ...page(2000, 0),    more_items: 1, last_assetid: 'a1999', total_inventory_count: 2500 },
+    'a1999': { ...page(500, 2000),  total_inventory_count: 2500 },
+  });
+  // No maxItemsPerApp override — this is what rate-account actually calls with.
+  const r = await fetchInventoryWithDeps({ apps: [{ appid: 753, contextid: '6' }] }, deps as any);
+  expect(r.items.length).toBe(2500);
+  expect(r.perApp[0]!.fetched).toBe(2500);
+  expect(r.partial).toBe(false);
+});
+
+test('an explicit maxItemsPerApp still truncates and marks partial', async () => {
+  const deps = makeDeps({
+    '0': {
+      assets: Array.from({ length: 10 }, (_, i) => ({ assetid: `a${i}`, classid: 'c1', instanceid: 'i1', amount: '1' })),
+      descriptions: [{ classid: 'c1', instanceid: 'i1', market_hash_name: 'Card', marketable: 1, tradable: 1 }],
+      more_items: 1, last_assetid: 'a9', total_inventory_count: 99,
+    },
+  });
+  const r = await fetchInventoryWithDeps({ apps: [{ appid: 753, contextid: '6' }], maxItemsPerApp: 10 }, deps as any);
+  expect(r.items.length).toBe(10);
+  expect(r.partial).toBe(true);
+});
+
+// `per_app: []` used to be the signature of a swallowed exception, which the
+// backend could not tell apart from "no partitions were asked for". Keep the
+// per-app rows so the failure is attributable.
+test('a stub that throws outright still reports per-app diagnostics', async () => {
+  const deps = { resolveStub: () => { throw new Error('webpack blew up'); }, getTransport: () => ({}) };
+  const r = await fetchInventoryWithDeps({ apps: [{ appid: 730, contextid: '2' }] }, deps as any);
+  expect(r.partial).toBe(true);
+  expect(r.items).toEqual([]);
+  expect(r.perApp.length).toBe(1);
+  expect(r.perApp[0]!.ok).toBe(false);
+  expect(String(r.perApp[0]!.error)).toContain('webpack blew up');
+});

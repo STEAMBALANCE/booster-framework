@@ -1,9 +1,10 @@
-import type { SteamApi, SteamUser, MachineId, OwnedGamesResult, AppContext, InventoryResult } from './api-types';
+import type { SteamApi, SteamUser, MachineId, OwnedGamesResult, AppContext, InventoryResult, ParentalState } from './api-types';
 import type { Registry } from '../registry';
 import type { Bridge } from '../bridge';
 import { createRelayChannel } from '../relay/channel';
 import { deriveCurrency, parseBalanceNumber } from '../steam-internals/currency-map';
 import { readCurrentSteamId64FromStoreGlobal, steamId64ToAccountId } from '../steam-internals/steam-id';
+import { DEFAULT_INVENTORY_APPS } from '../steam-internals/inventory';
 
 // Window.SteamClient shape is declared in relay/shared-context.ts (merged interface).
 
@@ -20,6 +21,17 @@ function getUserExtraTimeoutMs(): number {
   if (typeof process === 'undefined') return 5000;
   const env = Number(process.env['SB_USER_EXTRA_RELAY_TIMEOUT_MS']);
   return Number.isFinite(env) && env > 0 ? env : 5000;
+}
+
+/** Inventory needs its own, much larger budget: one call walks 5 partitions
+ *  SEQUENTIALLY, each paginating with get_descriptions over thousands of items.
+ *  The shared 5s budget expired mid-walk on exactly the accounts that have the
+ *  most to report, and the relay result — which does arrive — was discarded.
+ *  Stays under the native 40s CDP deadline on host.getRateAccountData. */
+export function getInventoryTimeoutMs(): number {
+  if (typeof process === 'undefined') return 25000;
+  const env = Number(process.env['SB_INVENTORY_RELAY_TIMEOUT_MS']);
+  return Number.isFinite(env) && env > 0 ? env : 25000;
 }
 
 // Bounded wait for the first user-snapshot when resolving steamId for
@@ -128,10 +140,10 @@ export function makeSteamApi(registry: Registry, bridge: Bridge, relaySecret?: s
   // {kind:okKind, requestId} reply, resolve pick(reply) or `fallback` on timeout.
   // Uses the userExtraNextRequestId id-space + a fresh self-removing listener
   // (NOT the openUrl `pending` map). Never rejects.
-  function callRelay<T>(reqKind: string, payload: object, okKind: string, pick: (m: any) => T, fallback: T): Promise<T> {
+  function callRelay<T>(reqKind: string, payload: object, okKind: string, pick: (m: any) => T, fallback: T, timeoutMs?: number): Promise<T> {
     return new Promise<T>((resolve) => {
       const requestId = userExtraNextRequestId++;
-      const timer = setTimeout(() => { off(); resolve(fallback); }, getUserExtraTimeoutMs());
+      const timer = setTimeout(() => { off(); resolve(fallback); }, timeoutMs ?? getUserExtraTimeoutMs());
       const off = ch.onMessage((data) => {
         const m = data as { kind?: string; requestId?: number } | undefined;
         if (m?.kind !== okKind || m?.requestId !== requestId) return;
@@ -317,22 +329,31 @@ export function makeSteamApi(registry: Registry, bridge: Bridge, relaySecret?: s
       return () => { userChangeListeners.delete(cb); };
     },
 
-    async getCurrentUserAsync(): Promise<SteamUser> {
+    async getCurrentUserAsync(timeoutMs?: number): Promise<SteamUser> {
       if (cachedUser) return cachedUser;
-      // Wait for the first non-null snapshot. The Promise is tracked in
-      // userAsyncPending so it can be rejected on framework rollback
-      // (instead of hanging forever).
+      // Wait for the first non-null snapshot, tracked in userAsyncPending so
+      // rollback can reject it. `timeoutMs` exists so callers don't race this
+      // externally: a race ABANDONS the loser without unregistering, leaving a
+      // handler that fires on every later snapshot for the session's life.
       return new Promise<SteamUser>((resolve, reject) => {
-        const handler = (u: SteamUser | null) => {
-          if (u !== null) {
-            userChangeListeners.delete(handler);
-            userAsyncPending.delete(entry);
-            resolve(u);
-          }
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const cleanup = (): void => {
+          userChangeListeners.delete(handler);
+          userAsyncPending.delete(entry);
+          if (timer !== undefined) clearTimeout(timer);
         };
-        const entry = { resolve, reject, handler };
+        const handler = (u: SteamUser | null) => {
+          if (u !== null) { cleanup(); resolve(u); }
+        };
+        const entry = { resolve, reject: (e: Error) => { cleanup(); reject(e); }, handler };
         userAsyncPending.add(entry);
         userChangeListeners.add(handler);
+        if (timeoutMs !== undefined && timeoutMs > 0) {
+          timer = setTimeout(() => {
+            cleanup();
+            reject(new Error(`user-wait-timeout: no Steam user snapshot within ${timeoutMs}ms`));
+          }, timeoutMs);
+        }
       });
     },
 
@@ -362,16 +383,34 @@ export function makeSteamApi(registry: Registry, bridge: Bridge, relaySecret?: s
       // Relay round-trip: the SharedJSContext handler calls fetchInventory over
       // the authenticated CM and posts back `inventory-ok`. Never rejects —
       // resolves the empty/partial default on timeout.
+      // Fallback mirrors the relay's per-app rows: a bare `perApp: []` reads as
+      // "no partitions requested" and hides that the walk timed out.
+      const apps = options?.apps ?? DEFAULT_INVENTORY_APPS;
       return callRelay('get-inventory',
         { options: options ?? {} },
         'inventory-ok', (m) => m.result as InventoryResult,
-        { items: [], perApp: [], partial: true });
+        { items: [],
+          perApp: apps.map((a) => ({ ...a, fetched: 0, ok: false, error: 'relay timeout' })),
+          partial: true },
+        getInventoryTimeoutMs());
     },
 
     getAccountLevel(): Promise<number | undefined> {
       const accountId = cachedUser?.accountId;
       return callRelay('get-account-level', { accountId }, 'account-level-ok',
         (m) => m.level as number | undefined, undefined);
+    },
+
+    getParentalState(): Promise<ParentalState | undefined> {
+      return callRelay('get-parental-state', {}, 'parental-state-ok',
+        (m) => m.state as ParentalState | undefined, undefined);
+    },
+
+    async getAvatarDataUrl(): Promise<string | null> {
+      const steamId = await resolveCurrentSteamId();
+      if (!steamId) return null;
+      return callRelay('get-avatar', { steamId }, 'avatar-ok',
+        (m) => (typeof m.dataUrl === 'string' ? m.dataUrl : null), null);
     },
   };
 }

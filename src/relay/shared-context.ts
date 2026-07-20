@@ -33,6 +33,8 @@ import { handleGetMachineId } from './machine-id';
 import { handleGetOwnedGames } from './owned-games';
 import { handleGetInventory } from './inventory';
 import { handleGetAccountLevel } from './account-level';
+import { handleGetParentalState } from './parental';
+import { handleGetAvatar } from './avatar';
 
 /** Splits a `createPluginUi`-prefixed popupId (`<pluginId>__<userId>`) into
  *  its owner and the user-facing key. Returns null for un-prefixed ids
@@ -334,6 +336,12 @@ export function startRelay(scope: ScopeApi, sec?: SecContext): () => void {
         break;
       case 'get-account-level':
         void handleGetAccountLevel(msg, poster);
+        break;
+      case 'get-parental-state':
+        void handleGetParentalState(msg, poster);
+        break;
+      case 'get-avatar':
+        void handleGetAvatar(msg, poster);
         break;
       case 'open-window':         winHandlers.handleOpenWindow(msg); break;
       case 'window-show':         winHandlers.handleShow(msg); break;

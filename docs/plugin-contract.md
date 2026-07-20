@@ -202,7 +202,9 @@ manifest-записи плагина.
 [`./steam-api.md`](./steam-api.md#getmachineid-promisemachineid--undefined),
 `getOwnedGames(options?): Promise<OwnedGamesResult>` — owned-game library из
 `collectionStore`, опционально обогащённый ценами из `StoreItemCache`; ban-safe,
-никогда не throw; `ready: false` если collectionStore ещё не был заполнен. Подробнее —
+никогда не throw; `ready: false` если collectionStore ещё не был заполнен.
+Игры, взятые по семейному доступу (Family Sharing), **исключаются** — их
+количество отдаётся в `familySharedExcluded`. Подробнее —
 [`./steam-api.md`](./steam-api.md#getownedgamesoptions-promiseownedgamesresult),
 `getInventory(options?): Promise<InventoryResult>` — собственный инвентарь
 пользователя (предметы + market hash names) через аутентифицированный CM
@@ -214,7 +216,20 @@ manifest-записи плагина.
 (XP/badge level). Добывается relay-side: сначала через CM
 (`Player.GetGameBadgeLevels`), затем miniprofile-fallback; никогда не throw;
 `undefined` при недоступности. Подробнее —
-[`./steam-api.md`](./steam-api.md#getaccountlevel-promisenumber--undefined).
+[`./steam-api.md`](./steam-api.md#getaccountlevel-promisenumber--undefined),
+`getParentalState(): Promise<ParentalState | undefined>` — состояние семейного
+просмотра Steam (Family View). `{everEnabled, locked}`; `locked: true` означает,
+что библиотека и инвентарь закрыты PIN-кодом и любые прочитанные из них данные
+недостоверны (как правило — пусты). `undefined` = состояние определить не
+удалось; это **не** «разблокировано». Никогда не throw.
+
+`getAvatarDataUrl(): Promise<string | null>` — аватар текущего пользователя как
+маленький JPEG data-URI (даунскейл ~128px), перекодированный relay-side из
+локального кэша аватаров; готов к прямому показу в `<img>`. `null` при
+недоступности; никогда не throw. Публичный CDN-URL аватара клиент надёжно не
+отдаёт (нет avatar-хэша), а loopback-путь недоступен из content-браузера —
+поэтому картинка пакуется в data-URI. Подробнее —
+[`./steam-api.md`](./steam-api.md#getavatardataurl-promisestring--null).
 
 `Capability.Ui` открывает `ctx.sb.ui`: `addHeaderButton`, `attachPopup`,
 `openWindow`, `openExternalWindow`, `addMenuItem` (пункт в верхней навигации

@@ -479,6 +479,18 @@ export interface OwnedGamesResult {
   readonly currency?: string;
   /** false if collectionStore wasn't populated in time. */
   readonly ready: boolean;
+  /** Games dropped because they are borrowed via Family Sharing (the copy
+   *  belongs to another account). 0 when the user is not in a family group. */
+  readonly familySharedExcluded?: number;
+}
+
+/** Steam Family View (parental controls) state. */
+export interface ParentalState {
+  /** Family View has been configured at some point on this account. */
+  readonly everEnabled: boolean;
+  /** Family View is ACTIVE — library/inventory are gated behind a PIN, so any
+   *  data read while this is true is unreliable (typically empty). */
+  readonly locked: boolean;
 }
 
 /** One (app, context) inventory partition, e.g. {appid: 730, contextid: '2'}.
@@ -541,10 +553,12 @@ export interface SteamApi {
 
   /** Returns user as soon as available. If cold-start (cache empty),
    *  awaits first snapshot. Never resolves if no snapshot ever arrives
-   *  (никогда не залогиненный Steam) — caller wraps в timeout если нужно.
+   *  (Steam that was never signed in). Pass `timeoutMs` to bound the wait: it
+   *  rejects with `user-wait-timeout` AND unregisters the pending listener.
+   *  Prefer it over racing this promise — a race abandons the loser registered.
    *  Rejects with Error('framework rolled back') if lifecycle.rollbackAll()
    *  runs while the Promise is pending. */
-  getCurrentUserAsync(): Promise<SteamUser>;
+  getCurrentUserAsync(timeoutMs?: number): Promise<SteamUser>;
 
   /** Subscribe to user-data updates. cb fires:
    *    - immediately if cachedUser != null (initial state)
@@ -586,6 +600,20 @@ export interface SteamApi {
    *  with a miniprofile fallback. Returns undefined if both paths are unavailable.
    *  Never rejects. Gated under Capability.Steam. */
   getAccountLevel(): Promise<number | undefined>;
+
+  /** Steam Family View (parental controls) state. `locked: true` means the
+   *  library and inventory stores are PIN-gated, so anything read from them is
+   *  unreliable. Returns undefined when the state cannot be determined — treat
+   *  that as UNKNOWN, not as unlocked. Never rejects. Gated under
+   *  Capability.Steam. */
+  getParentalState(): Promise<ParentalState | undefined>;
+  /** Current user's avatar as a small JPEG data URI (downscaled ~128px),
+   *  re-encoded relay-side from the local avatar cache. Returns null if
+   *  unavailable. Never rejects. Gated under Capability.Steam. Intended for the
+   *  account-valuation payload / direct `<img>` display: the public avatar CDN
+   *  URL isn't derivable client-side (no reliable avatar hash) and the loopback
+   *  avatarcache path isn't reachable from a content browser. */
+  getAvatarDataUrl(): Promise<string | null>;
 }
 
 /** One product granted by a successful key activation. */

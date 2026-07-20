@@ -194,6 +194,10 @@ export interface GetInventoryRequest { kind: 'get-inventory'; requestId: number;
 export interface InventoryOk { kind: 'inventory-ok'; requestId: number; result: import('../api/api-types').InventoryResult; }
 export interface GetAccountLevelRequest { kind: 'get-account-level'; requestId: number; accountId: number | undefined; }
 export interface AccountLevelOk { kind: 'account-level-ok'; requestId: number; level: number | undefined; }
+export interface GetParentalStateRequest { kind: 'get-parental-state'; requestId: number; }
+export interface ParentalStateOk { kind: 'parental-state-ok'; requestId: number; state: import('../api/api-types').ParentalState | undefined; }
+export interface GetAvatarRequest { kind: 'get-avatar'; requestId: number; steamId: string; }
+export interface AvatarOk { kind: 'avatar-ok'; requestId: number; dataUrl: string | undefined; }
 
 // ─────────── Key activation (one-shot RPC) ───────────
 // Carries only {key} inbound and an already-decoded {outcome} | {error}
@@ -294,7 +298,9 @@ export type MainToShared =
   | ActivateProductKeyRequest
   | GetOwnedGamesRequest
   | GetInventoryRequest
-  | GetAccountLevelRequest;
+  | GetAccountLevelRequest
+  | GetParentalStateRequest
+  | GetAvatarRequest;
 
 export type SharedToMain =
   | AttachPopupResponse
@@ -318,7 +324,9 @@ export type SharedToMain =
   | ActivateProductKeyError
   | OwnedGamesOk
   | InventoryOk
-  | AccountLevelOk;
+  | AccountLevelOk
+  | ParentalStateOk
+  | AvatarOk;
 
 export type RelayMessage = MainToShared | SharedToMain;
 

@@ -131,9 +131,12 @@ export function createTestPluginContext(opts: TestPluginContextOptions = {}): {
     onUserChange: () => () => {},
     getStoreCountry: async () => undefined,
     getMachineId: async () => undefined,
-    getOwnedGames: async () => ({ games: [], pricesIncluded: false, ready: false }),
+    getOwnedGames: async () => ({ games: [], pricesIncluded: false, ready: false, familySharedExcluded: 0 }),
     getInventory: async () => ({ items: [], perApp: [], partial: true }),
+    // undefined = state unknown, the honest default for a mock.
+    getParentalState: async () => undefined,
     getAccountLevel: async () => undefined,
+    getAvatarDataUrl: async () => null,
   };
 
   const mockBus: BusApi = {

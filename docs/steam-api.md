@@ -18,6 +18,8 @@ interface SteamApi {
   getOwnedGames(options?: { includePrices?: boolean }): Promise<OwnedGamesResult>;
   getInventory(options?: { apps?: AppContext[]; maxItemsPerApp?: number; includeIcons?: boolean }): Promise<InventoryResult>;
   getAccountLevel(): Promise<number | undefined>;
+  getParentalState(): Promise<ParentalState | undefined>;
+  getAvatarDataUrl(): Promise<string | null>;
 }
 ```
 
@@ -478,6 +480,8 @@ interface OwnedGamesResult {
   readonly currency?: string;
   /** false if collectionStore wasn't populated in time. */
   readonly ready: boolean;
+  /** Games dropped because they are borrowed via Family Sharing. */
+  readonly familySharedExcluded?: number;
 }
 ```
 
@@ -649,6 +653,31 @@ const level = await ctx.sb.steam.getAccountLevel(); // 42 | undefined
 
 ---
 
+## `getAvatarDataUrl(): Promise<string | null>`
+
+Returns the current user's avatar as a small JPEG **data URI** (downscaled to
+~128px), ready to drop straight into an `<img src>`.
+
+```ts
+const avatar = await ctx.sb.steam.getAvatarDataUrl(); // "data:image/jpeg;base64,…" | null
+if (avatar) img.src = avatar;
+```
+
+- Read relay-side (SharedJSContext) from the local avatar cache
+  (`steamloopback.host/avatarcache/<steamId64>.png`) and re-encoded to a small
+  JPEG via a same-origin canvas (so the canvas isn't tainted). Typical output is
+  ~5–10 KB vs the raw PNG's tens of KB.
+- **Why a data URI and not a URL:** the public avatar CDN URL isn't derivable
+  client-side (the client exposes no reliable avatar hash for the local user),
+  and the loopback `avatarcache` path isn't reachable from a content browser —
+  so the bytes are packed inline.
+- Animated (APNG) avatars collapse to their first frame.
+- **Never rejects.** Returns `null` if the current `steamId` can't be resolved,
+  the cache file is missing, or encoding fails.
+- Gated under `Capability.Steam`.
+
+---
+
 # Keys API
 
 `ctx.sb.keys.*` — активация продуктовых ключей Steam.
@@ -815,3 +844,37 @@ sb.plugins.register({
 - [`./lifecycle.md`](./lifecycle.md) — почему snapshot resets на
   rollback.
 - [`./ui-api.md`](./ui-api.md) — `openExternalWindow` против `openUrl`.
+
+---
+
+## `getParentalState(): Promise<ParentalState | undefined>`
+
+Состояние семейного просмотра Steam (Family View / родительский контроль).
+
+```ts
+interface ParentalState {
+  /** Семейный просмотр когда-либо настраивался на этом аккаунте. */
+  readonly everEnabled: boolean;
+  /** Семейный просмотр АКТИВЕН сейчас — библиотека и инвентарь закрыты PIN-кодом. */
+  readonly locked: boolean;
+}
+```
+
+```ts
+const st = await ctx.sb.steam.getParentalState();
+if (st?.locked) {
+  // Данные Steam недостоверны: сторы под PIN-локом читаются пустыми.
+}
+```
+
+Источник — `SteamClient.Parental.RegisterForParentalSettingsChanges`. Steam
+отдаёт состояние только через подписку, поэтому фреймворк делает
+одноразовое чтение с таймаутом и сразу отписывается.
+
+`undefined` означает **неизвестно** (не SharedJSContext, API отсутствует,
+колбэк не сработал вовремя) — это **не** «разблокировано». Никогда не throw.
+
+**Почему это важно.** При `locked: true` `collectionStore` и инвентарь
+читаются пустыми, из-за чего оценка аккаунта раньше давала уверенный ноль.
+`collectRatePayload` теперь заранее проверяет флаг и отклоняется с кодом
+`sb_family_view_locked`, а не собирает заведомо неверные данные.

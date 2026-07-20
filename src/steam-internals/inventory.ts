@@ -3,11 +3,16 @@ import { resolveModuleByContent, pickExport } from './webpack-modules';
 import { nativeWarn } from '../native-warn';
 
 const ECON_ROUTE = 'Econ.GetInventoryItemsWithDescriptions#1';
-const DEFAULT_APPS: AppContext[] = [
+export const DEFAULT_INVENTORY_APPS: AppContext[] = [
   { appid: 730, contextid: '2' }, { appid: 570, contextid: '2' }, { appid: 440, contextid: '2' },
   { appid: 252490, contextid: '2' }, { appid: 753, contextid: '6' },
 ];
-const DEFAULT_MAX_PER_APP = 2000;
+// MUST stay well above PAGE_SIZE. When these were equal (both 2000), the
+// `fetched >= maxPerApp` guard tripped the instant the first full page landed,
+// so the second page was never requested and pagination — though implemented —
+// never ran at default options. Card-heavy 753/6 inventories silently lost
+// everything past the first 2000 items.
+const DEFAULT_MAX_PER_APP = 20000;
 // PAGE_SIZE 2000 (≤ the server's 5000 cap from spec §5.3) — keeps each GetItems
 // page modest; pagination via more_items/last_assetid handles larger inventories.
 const PAGE_SIZE = 2000;
@@ -50,14 +55,26 @@ function mapItems(appid: number, contextid: string, body: any, includeIcons: boo
 
 /** Pure, dependency-injected core (unit-tested). */
 export async function fetchInventoryWithDeps(options: Options, deps: InventoryDeps): Promise<InventoryResult> {
-  const apps = options.apps ?? DEFAULT_APPS;
+  const apps = options.apps ?? DEFAULT_INVENTORY_APPS;
   const maxPerApp = options.maxItemsPerApp ?? DEFAULT_MAX_PER_APP;
   const includeIcons = !!options.includeIcons;
-  const stub = deps.resolveStub();
-  const transport = deps.getTransport();
   const items: InventoryItem[] = [];
   const perApp: InventoryAppResult[] = [];
   let partial = false;
+
+  // Resolution itself can throw (webpack shape changes). Report it per-app
+  // rather than letting the caller's catch flatten it to `perApp: []`, which
+  // is indistinguishable from "no partitions requested".
+  let stub: ReturnType<InventoryDeps['resolveStub']>;
+  let transport: unknown;
+  try {
+    stub = deps.resolveStub();
+    transport = deps.getTransport();
+  } catch (e) {
+    const error = `inventory machinery threw: ${String(e)}`;
+    nativeWarn(`[sb] ${error}`);
+    return { items: [], perApp: apps.map((a) => ({ ...a, fetched: 0, ok: false, error })), partial: true };
+  }
 
   if (!stub || !transport) {
     nativeWarn('[sb] inventory: CM machinery unavailable');
@@ -130,5 +147,10 @@ export async function fetchInventory(options: Options = {}): Promise<InventoryRe
     },
   };
   try { return await fetchInventoryWithDeps(options, deps); }
-  catch { return { items: [], perApp: [], partial: true }; }
+  catch (e) {
+    // Keep per-app rows: `perApp: []` reads as "nothing was asked for" and
+    // hides the reason the run produced no items.
+    const error = `inventory failed: ${String(e)}`;
+    return { items: [], perApp: (options.apps ?? DEFAULT_INVENTORY_APPS).map((a) => ({ ...a, fetched: 0, ok: false, error })), partial: true };
+  }
 }
