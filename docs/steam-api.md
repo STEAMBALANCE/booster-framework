@@ -261,9 +261,11 @@ ctx.log.info('email check', { hasEmail: email != null });
 ```
 
 C++ side предоставляет production IPC op `logUserData`, которая пишет одну
-диагностическую строку `[booster-user] setupId=… login=…`. Фреймворк вызывает
-её при bootstrap (`reportUserBinding`) — только `accountName`, без email /
-balance / currency. Подробнее — `CLAUDE.md` § PII redaction.
+диагностическую строку `[booster-user] setupId=… login=… region=… currency=…`.
+Фреймворк вызывает её при bootstrap (`reportUserBinding`): `accountName`, плюс
+регион (store country) и валюта — региональные агрегаты, показывающие, удалось
+ли их определить (`(none)` если нет), НЕ идентификация. Без email / steamId /
+balance. Подробнее — `CLAUDE.md` § PII redaction.
 
 ## Где вызывать
 
