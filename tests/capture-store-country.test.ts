@@ -31,7 +31,11 @@ test('does not match a different account_data_field that precedes country_settin
 import { maybeCaptureStoreCountry } from '../src/steam-internals/capture-store-country';
 
 function makeScope(html: string, ok = true) {
-  return { fetch: async () => ({ ok, text: async () => html } as Response) } as never;
+  return {
+    fetch: async () => ({ ok, text: async () => html } as Response),
+    setTimeout: (cb: () => void, ms: number) => globalThis.setTimeout(cb, ms),
+    clearTimeout: (id: unknown) => globalThis.clearTimeout(id as never),
+  } as never;
 }
 function setOrigin(origin: string) {
   // happy-dom not used here; stub location via globalThis.
@@ -60,13 +64,33 @@ test('no-op outside store origin', async () => {
   delete (globalThis as Record<string, unknown>)['g_AccountID'];
 });
 
-test('no-op when g_AccountID absent', async () => {
+test('no-op when g_AccountID never appears (bounded wait, then give up)', async () => {
   setOrigin('https://store.steampowered.com');
+  process.env['SB_STORE_COUNTRY_POLL_MAX_MS'] = '60';
   const calls: unknown[] = [];
   const bridge = { call: async (op: string) => { calls.push(op); return {}; } } as never;
   maybeCaptureStoreCountry(bridge, makeScope('<div class="country_settings"><span class="account_data_field">Kazakhstan</span></div>'));
-  await new Promise((r) => setTimeout(r, 10));
+  await new Promise((r) => setTimeout(r, 120));
   expect(calls).toEqual([]);
+  delete process.env['SB_STORE_COUNTRY_POLL_MAX_MS'];
+});
+
+// The store page sets g_AccountID from its OWN inline scripts, which run AFTER
+// our doc-start injection. Reading it once and bailing (the old behavior) meant
+// capture almost never fired on a navigation — the account-switch bug. Poll for
+// it instead of giving up on the first miss.
+test('waits for a g_AccountID that appears after injection (doc-start race)', async () => {
+  setOrigin('https://store.steampowered.com');
+  process.env['SB_STORE_COUNTRY_POLL_INTERVAL_MS'] = '15';
+  const calls: Array<{ op: string; args: unknown }> = [];
+  const bridge = { call: async (op: string, args: unknown) => { calls.push({ op, args }); return {}; } } as never;
+  // g_AccountID absent at call time; the page sets it 30ms later.
+  maybeCaptureStoreCountry(bridge, makeScope('<div class="country_settings"><span class="account_data_field">Kazakhstan</span></div>'));
+  setTimeout(() => { (globalThis as Record<string, unknown>)['g_AccountID'] = 1340000000; }, 30);
+  await new Promise((r) => setTimeout(r, 250));
+  expect(calls).toContainEqual({ op: 'set_store_country', args: { steamId: '76561199300265728', country: 'KZ' } });
+  delete (globalThis as Record<string, unknown>)['g_AccountID'];
+  delete process.env['SB_STORE_COUNTRY_POLL_INTERVAL_MS'];
 });
 
 test('never throws on fetch failure / unknown country', async () => {
