@@ -66,12 +66,16 @@ test('no-op outside store origin', async () => {
 
 test('no-op when g_AccountID never appears (bounded wait, then give up)', async () => {
   setOrigin('https://store.steampowered.com');
+  // Short interval too, so the give-up path (waited >= budget) actually runs
+  // within the wait window — otherwise the assert fires before the first tick.
+  process.env['SB_STORE_COUNTRY_POLL_INTERVAL_MS'] = '15';
   process.env['SB_STORE_COUNTRY_POLL_MAX_MS'] = '60';
   const calls: unknown[] = [];
   const bridge = { call: async (op: string) => { calls.push(op); return {}; } } as never;
   maybeCaptureStoreCountry(bridge, makeScope('<div class="country_settings"><span class="account_data_field">Kazakhstan</span></div>'));
-  await new Promise((r) => setTimeout(r, 120));
+  await new Promise((r) => setTimeout(r, 150));   // > budget, so poll has given up
   expect(calls).toEqual([]);
+  delete process.env['SB_STORE_COUNTRY_POLL_INTERVAL_MS'];
   delete process.env['SB_STORE_COUNTRY_POLL_MAX_MS'];
 });
 
