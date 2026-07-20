@@ -12,14 +12,40 @@ function fakeBridge() {
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
 describe('reportUserBinding', () => {
-  test('logs login only when a user resolves', async () => {
+  test('logs login, store country and currency when they resolve', async () => {
     const { calls, bridge } = fakeBridge();
-    const steam = { getCurrentUserAsync: async () => ({ accountName: 'matrix_aas' }) } as any;
+    const steam = {
+      getCurrentUserAsync: async () => ({ accountName: 'matrix_aas', currency: 'KZT' }),
+      getStoreCountry: async () => 'KZ',
+    } as any;
     reportUserBinding(steam, bridge);
     await tick();
     const log = calls.find((c) => c.op === 'logUserData');
     expect(log).toBeDefined();
-    expect(log!.args).toEqual({ login: 'matrix_aas' });  // no email/balance/currency
+    // country + currency are diagnostic (did region/currency detection work?),
+    // not identity — no email/steamId/balance.
+    expect(log!.args).toEqual({ login: 'matrix_aas', country: 'KZ', currency: 'KZT' });
+  });
+
+  test('sends null for country/currency that could not be determined', async () => {
+    const { calls, bridge } = fakeBridge();
+    const steam = {
+      getCurrentUserAsync: async () => ({ accountName: 'u' }),        // no currency parsed
+      getStoreCountry: async () => undefined,                         // region unknown
+    } as any;
+    reportUserBinding(steam, bridge);
+    await tick();
+    const log = calls.find((c) => c.op === 'logUserData');
+    expect(log!.args).toEqual({ login: 'u', country: null, currency: null });
+  });
+
+  test('tolerates a steam api without getStoreCountry', async () => {
+    const { calls, bridge } = fakeBridge();
+    const steam = { getCurrentUserAsync: async () => ({ accountName: 'u', currency: 'RUB' }) } as any;
+    reportUserBinding(steam, bridge);
+    await tick();
+    const log = calls.find((c) => c.op === 'logUserData');
+    expect(log!.args).toEqual({ login: 'u', country: null, currency: 'RUB' });
   });
 
   test('does not call logUserData when no user resolves', async () => {
