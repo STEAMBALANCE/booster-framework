@@ -67,9 +67,16 @@ export function installTabMemoryGuard(mwbm: TabMwbm | undefined | null): void {
   // left alone.
   try {
     const active = mwbm.m_lastActiveTabURLs;
+    const roots = mwbm.m_rootTabURLs;
     if (active) {
       for (const tab of Object.keys(active)) {
-        if (mwbm.GetTabForURL!(active[tab]!) === 'ignore') delete active[tab];
+        // Delete a slot holding one of our external pages (classifies ignore),
+        // OR a route id an earlier buggy heal wrote (e.g. "StoreFrontPage",
+        // which loads as http://storefrontpage/). Both revert to the clean
+        // "unvisited tab" state Steam resolves from m_rootTabURLs itself.
+        if (mwbm.GetTabForURL!(active[tab]!) === 'ignore' || (roots && active[tab] === roots[tab])) {
+          delete active[tab];
+        }
       }
     }
   } catch { /* best-effort */ }

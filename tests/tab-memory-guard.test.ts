@@ -78,6 +78,15 @@ describe('installTabMemoryGuard', () => {
     expect(m.m_lastActiveTabURLs['me']).toBe('https://steamcommunity.com/id/someone'); // untouched
   });
 
+  // Belt-and-suspenders: a slot poisoned with a route id by an earlier buggy
+  // heal ("StoreFrontPage", loads as http://storefrontpage/ → -105) is cleaned.
+  test('heals a slot holding a route id (leftover from the old buggy heal)', () => {
+    const m = makeMwbm({ store: 'StoreFrontPage', community: 'CommunityFrontPage' });
+    installTabMemoryGuard(m as never);
+    expect('store' in m.m_lastActiveTabURLs).toBe(false);
+    expect('community' in m.m_lastActiveTabURLs).toBe(false);
+  });
+
   test('a real store URL still updates the store tab after the guard', () => {
     const m = makeMwbm({ store: 'https://steambalance.cc/booster/viral' });
     installTabMemoryGuard(m as never);
