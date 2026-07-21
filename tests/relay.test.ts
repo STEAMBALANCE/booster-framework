@@ -227,6 +227,34 @@ test('relay navigate installs the tab-memory guard on MWBM', async () => {
   sender.close();
 });
 
+test('tab-guard poll installs on an MWBM that appears after relay start (store-nav path)', async () => {
+  // The store-nav catalog button navigates via location.assign in the store
+  // context — never through the relay. The guard for that path comes from the
+  // MWBM-ready poll at startRelay. Verify a late-arriving MWBM still gets it.
+  process.env['SB_TAB_GUARD_POLL_MS'] = '10';
+  try {
+    // MWBM absent at startRelay time.
+    delete (globalThis as { MainWindowBrowserManager?: unknown }).MainWindowBrowserManager;
+    (win as unknown as { MainWindowBrowserManager?: unknown }).MainWindowBrowserManager = undefined;
+
+    const { startRelay } = await import('../src/relay/shared-context');
+    stopRelay = startRelay(createScope());
+
+    // Now MWBM shows up (Steam UI finished loading).
+    const mwbm = {
+      GetTabForURL: (url: string) => (url.startsWith('https://store.steampowered.com') ? 'store' : 'maintain'),
+      m_lastActiveTabURLs: {} as Record<string, string>,
+    };
+    (win as unknown as { MainWindowBrowserManager?: unknown }).MainWindowBrowserManager = mwbm;
+    (globalThis as { MainWindowBrowserManager?: unknown }).MainWindowBrowserManager = mwbm;
+
+    await new Promise((r) => setTimeout(r, 60));   // let a poll tick fire
+    expect(mwbm.GetTabForURL('https://steambalance.cc/booster/viral')).toBe('ignore');
+  } finally {
+    delete process.env['SB_TAB_GUARD_POLL_MS'];
+  }
+});
+
 test('relay navigate prefers MWBM.ShowURL over LoadURL (works from Library)', async () => {
   // ShowURL switches the main window's router to the /browser/ route so the
   // navigation is visible even when the main window is showing the Library —

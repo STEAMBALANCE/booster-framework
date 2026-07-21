@@ -56,17 +56,18 @@ export function installTabMemoryGuard(mwbm: TabMwbm | undefined | null): void {
   }
 
   // Heal tabs whose remembered URL is an external page we clobbered before the
-  // guard existed: reset to the tab's root so Steam's buttons return the real
-  // page. A tab holding a genuine Steam URL classifies store/community (not
-  // ignore) and is left alone.
+  // guard existed: DELETE the slot. Clean Steam has no entry for an unvisited
+  // tab and resolves its root from m_rootTabURLs, so deleting restores exactly
+  // that — clicking the tab returns the real store/community page. Do NOT write
+  // the root id here: m_lastActiveTabURLs holds real URLs, and a route id like
+  // "StoreFrontPage" loads as http://storefrontpage/ (net error -105). A tab
+  // holding a genuine Steam URL classifies store/community (not ignore) and is
+  // left alone.
   try {
     const active = mwbm.m_lastActiveTabURLs;
-    const roots = mwbm.m_rootTabURLs;
-    if (active && roots) {
+    if (active) {
       for (const tab of Object.keys(active)) {
-        if (mwbm.GetTabForURL!(active[tab]!) === 'ignore' && roots[tab] != null) {
-          active[tab] = roots[tab]!;
-        }
+        if (mwbm.GetTabForURL!(active[tab]!) === 'ignore') delete active[tab];
       }
     }
   } catch { /* best-effort */ }

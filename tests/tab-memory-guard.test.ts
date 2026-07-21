@@ -62,15 +62,19 @@ describe('installTabMemoryGuard', () => {
     expect(m.GetTabForURL).toBe(afterFirst);
   });
 
-  test('heals tabs already clobbered by our pages → reset to root', () => {
+  // Clean Steam has no entry for an unvisited tab — it resolves the tab's root
+  // from m_rootTabURLs. So healing must DELETE a clobbered slot, not write the
+  // route id ("StoreFrontPage") as a URL (which loads as http://storefrontpage/
+  // → net error -105). Verified against a fresh Steam restart.
+  test('heals tabs already clobbered by our pages → deletes the slot', () => {
     const m = makeMwbm({
       store: 'https://steambalance.cc/booster/viral',
       community: 'https://steambalance.cc/booster/catalogue',
       me: 'https://steamcommunity.com/id/someone',   // a real Steam URL — must NOT be healed
     });
     installTabMemoryGuard(m as never);
-    expect(m.m_lastActiveTabURLs['store']).toBe('StoreFrontPage');
-    expect(m.m_lastActiveTabURLs['community']).toBe('CommunityFrontPage');
+    expect('store' in m.m_lastActiveTabURLs).toBe(false);       // deleted → Steam resolves root
+    expect('community' in m.m_lastActiveTabURLs).toBe(false);   // deleted
     expect(m.m_lastActiveTabURLs['me']).toBe('https://steamcommunity.com/id/someone'); // untouched
   });
 

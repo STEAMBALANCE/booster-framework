@@ -402,8 +402,13 @@ export function startRelay(scope: ScopeApi, sec?: SecContext): () => void {
   // tab clobber is only prevented if the guard is already in place. Poll until
   // MWBM.GetTabForURL exists (it may lag bootstrap). Bounded; scope-cancelled.
   (function installTabGuardWhenReady(): void {
-    const POLL_MS = 500;
-    const MAX_MS = 15000;
+    const envN = (k: string, d: number): number => {
+      if (typeof process === 'undefined') return d;
+      const v = Number(process.env[k]);
+      return Number.isFinite(v) && v > 0 ? v : d;
+    };
+    const POLL_MS = envN('SB_TAB_GUARD_POLL_MS', 500);
+    const MAX_MS = envN('SB_TAB_GUARD_POLL_MAX_MS', 15000);
     let waited = 0;
     const tryOnce = (): boolean => {
       const mwbm = (window as unknown as { MainWindowBrowserManager?: { GetTabForURL?: unknown } }).MainWindowBrowserManager;
