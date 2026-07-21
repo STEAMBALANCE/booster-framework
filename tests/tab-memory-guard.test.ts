@@ -5,7 +5,7 @@
 // page. The guard reclassifies external "maintain" pages as "ignore" so they
 // don't clobber tab memory, and heals tabs already clobbered.
 import { test, expect, describe } from 'bun:test';
-import { installTabMemoryGuard } from '../src/relay/tab-memory-guard';
+import { installTabMemoryGuard, uninstallTabMemoryGuard } from '../src/relay/tab-memory-guard';
 
 function makeMwbm(lastActive: Record<string, string> = {}) {
   return {
@@ -91,5 +91,25 @@ describe('installTabMemoryGuard', () => {
   test('no MWBM / no GetTabForURL → no-op, never throws', () => {
     expect(() => installTabMemoryGuard(undefined as never)).not.toThrow();
     expect(() => installTabMemoryGuard({} as never)).not.toThrow();
+  });
+});
+
+describe('uninstallTabMemoryGuard', () => {
+  test('restores the original GetTabForURL so a hot-update can re-wrap', () => {
+    const m = makeMwbm();
+    const orig = m.GetTabForURL;
+    installTabMemoryGuard(m as never);
+    expect(m.GetTabForURL).not.toBe(orig);   // wrapped
+    uninstallTabMemoryGuard(m as never);
+    expect(m.GetTabForURL).toBe(orig);       // unwrapped back to native
+    expect(m.__sb_tab_guard).toBe(false);
+    // a fresh install re-wraps (not shadowed by a stale flag)
+    installTabMemoryGuard(m as never);
+    expect(m.GetTabForURL).not.toBe(orig);
+  });
+
+  test('no-op on an unguarded / absent MWBM', () => {
+    expect(() => uninstallTabMemoryGuard(undefined as never)).not.toThrow();
+    expect(() => uninstallTabMemoryGuard(makeMwbm() as never)).not.toThrow();
   });
 });

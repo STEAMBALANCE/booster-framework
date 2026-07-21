@@ -32,6 +32,7 @@ interface TabMwbm {
   m_lastActiveTabURLs?: Record<string, string>;
   m_rootTabURLs?: Record<string, string>;
   __sb_tab_guard?: boolean;
+  __sb_tab_guard_orig?: (url: string) => string;
 }
 
 /** Wrap MWBM.GetTabForURL so external "maintain" pages (ours, payment redirects)
@@ -43,6 +44,7 @@ export function installTabMemoryGuard(mwbm: TabMwbm | undefined | null): void {
 
   if (!mwbm.__sb_tab_guard) {
     const orig = mwbm.GetTabForURL.bind(mwbm);
+    mwbm.__sb_tab_guard_orig = mwbm.GetTabForURL;   // for uninstall on relay teardown
     mwbm.GetTabForURL = (url: string): string => {
       const tab = orig(url);
       if (tab === 'maintain') {
@@ -71,4 +73,17 @@ export function installTabMemoryGuard(mwbm: TabMwbm | undefined | null): void {
       }
     }
   } catch { /* best-effort */ }
+}
+
+/** Restore the original GetTabForURL. Called on relay teardown so a hot-update
+ *  reinstalls a fresh guard — the __sb_tab_guard flag lives on the MWBM object
+ *  (which survives reinjection), so without this the new bundle's guard code
+ *  would be shadowed by the previous install. Idempotent; never throws. */
+export function uninstallTabMemoryGuard(mwbm: TabMwbm | undefined | null): void {
+  if (!mwbm || !mwbm.__sb_tab_guard) return;
+  try {
+    if (typeof mwbm.__sb_tab_guard_orig === 'function') mwbm.GetTabForURL = mwbm.__sb_tab_guard_orig;
+  } catch { /* best-effort */ }
+  mwbm.__sb_tab_guard_orig = undefined;
+  mwbm.__sb_tab_guard = false;
 }

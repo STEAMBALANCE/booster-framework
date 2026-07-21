@@ -35,7 +35,7 @@ import { handleGetInventory } from './inventory';
 import { handleGetAccountLevel } from './account-level';
 import { handleGetParentalState } from './parental';
 import { handleGetAvatar } from './avatar';
-import { installTabMemoryGuard } from './tab-memory-guard';
+import { installTabMemoryGuard, uninstallTabMemoryGuard } from './tab-memory-guard';
 
 /** Splits a `createPluginUi`-prefixed popupId (`<pluginId>__<userId>`) into
  *  its owner and the user-facing key. Returns null for un-prefixed ids
@@ -824,6 +824,13 @@ export function startRelay(scope: ScopeApi, sec?: SecContext): () => void {
     // clears entries and bridge ref. Must run before bc.close() so any
     // final broadcasts (none expected on teardown) can still post.
     try { teardownExternalWindowRelay(); } catch { /* swallow */ }
+    // Unwrap our GetTabForURL so a hot-update reinstalls a fresh guard (the
+    // __sb_tab_guard flag lives on MWBM, which survives reinjection).
+    try {
+      uninstallTabMemoryGuard(
+        (window as unknown as { MainWindowBrowserManager?: never }).MainWindowBrowserManager,
+      );
+    } catch { /* swallow */ }
     bc.close();
     window.__sb_relay_started = false;
     if (window.__sb_relay_teardown === teardown) {
