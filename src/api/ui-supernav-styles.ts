@@ -6,14 +6,14 @@
 // `!important` on visual props beats Steam's (un-!important) hashed-class
 // cascade deterministically.
 
-const STYLE_ID = '__sb_supernav_styles_v3';
+const STYLE_ID = '__sb_supernav_styles_v4';
 const STYLE_ID_PREFIX = '__sb_supernav_styles_';
 
 const CSS = `
 [data-booster-supernav-btn]{
   box-sizing:border-box; display:inline-flex; align-items:center; align-self:center;
-  gap:8px; height:32px; padding:0 8px; margin:0 0 0 4px;
-  border:0; border-radius:6px; cursor:pointer; user-select:none; white-space:nowrap;
+  gap:8px; height:24px; padding:4px 6px; margin:0 0 0 4px;
+  border:0; border-radius:2px; cursor:pointer; user-select:none; white-space:nowrap;
   -webkit-app-region:no-drag;
   /* Nudge 3px UP to optically center with Steam's supernav tab labels: the
      native 18px tab text sits high in the row (its box-center is ~47 vs the
@@ -21,15 +21,15 @@ const CSS = `
      active-tab underline), so a row-centered pill reads ~3px LOW next to it.
      Value tuned against the real client at devicePixelRatio 1.25. */
   position:relative; top:-3px;
-  font:700 14px/16px "Motiva Sans", Arial, Helvetica, sans-serif;
-  text-transform:uppercase; letter-spacing:.02em;
+  font:700 12px/16px "Motiva Sans", Arial, Helvetica, sans-serif;
+  text-transform:uppercase; letter-spacing:0;
   transition:background-color .12s ease, color .12s ease, opacity .12s ease;
 }
 [data-booster-supernav-btn][data-booster-variant="brand"]{ background:#34a37b !important; color:#fff !important; }
 [data-booster-supernav-btn][data-booster-variant="brand"]:hover{ background:#3eb487 !important; color:#fff !important; }
 [data-booster-supernav-btn][aria-disabled="true"]{ cursor:default; pointer-events:none; }
 [data-booster-supernav-btn][data-booster-loading="true"]{ opacity:.65; }
-.booster-supernav-spinner{ display:none; width:14px; height:14px; flex:0 0 auto;
+.booster-supernav-spinner{ display:none; width:12px; height:12px; flex:0 0 auto;
   border-radius:50%; border:2px solid rgba(255,255,255,.35); border-top-color:#fff;
   animation:booster-supernav-spin .7s linear infinite; }
 [data-booster-supernav-btn][data-booster-loading="true"] .booster-supernav-spinner{ display:inline-block; }
