@@ -14,6 +14,7 @@ interface SteamApi {
   getCurrentUserAsync(): Promise<SteamUser>;
   onUserChange(cb: (user: SteamUser | null) => void): () => void;
   getStoreCountry(): Promise<string | undefined>;
+  getStoreCurrency(): Promise<string | undefined>;
   getMachineId(): Promise<MachineId | undefined>;
   getOwnedGames(options?: { includePrices?: boolean }): Promise<OwnedGamesResult>;
   getInventory(options?: { apps?: AppContext[]; maxItemsPerApp?: number; includeIcons?: boolean }): Promise<InventoryResult>;
@@ -127,6 +128,31 @@ const cc = await ctx.sb.steam.getStoreCountry(); // 'KZ' | undefined
   ошибается; `undefined` на JS-стороне возникает, если не удалось
   определить `steamId` либо сработал catch/таймаут в `steam.ts`.
   **Никогда не throw.**
+- Gated под `Capability.Steam` (как весь `sb.steam`).
+
+## `getStoreCurrency(): Promise<string | undefined>`
+
+Валюта кошелька (ISO 4217, напр. `'USD'`), с фолбэком для пустых кошельков.
+
+```ts
+const currency = await ctx.sb.steam.getStoreCurrency(); // 'USD' | undefined
+```
+
+Каскад:
+
+1. `SteamUser.currency` — валюта, выведенная из строки баланса
+   (`balanceFormatted`). Работает, если кошелёк когда-либо пополнялся.
+2. Если баланса нет (пустой кошелёк не отдаёт `strAccountBalance`) — фолбэк
+   через `getStoreCountry()` → `currencyForStoreCountry`
+   (`steam-internals/country-to-currency.ts`).
+
+- Читает **актуальный** нативный кэш страны магазина при **каждом** вызове —
+  вызывайте в точке использования (не кэшируйте сами), чтобы поймать страну,
+  захваченную уже после первого snapshot'а (типичный случай: новый юзер только
+  что зашёл в Магазин в текущей сессии).
+- `undefined`, если ни строка баланса, ни страна магазина не определены, либо
+  страна вне RU-региона (см. `currencyForStoreCountry`).
+- **Никогда не throw.**
 - Gated под `Capability.Steam` (как весь `sb.steam`).
 
 ## `getMachineId(): Promise<MachineId | undefined>`

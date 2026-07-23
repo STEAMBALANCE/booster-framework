@@ -78,6 +78,12 @@ describe('collectRatePayload', () => {
     await expect(collectRatePayload(sb, 1)).rejects.toThrow();
   });
 
+  it('falls back to store-country currency when the wallet is empty', async () => {
+    const sb = fakeSb({ user: { currency: undefined }, steam: { getStoreCountry: async () => 'BY' } });
+    const p = await collectRatePayload(sb, 1);
+    expect(p.account.currency).toBe('USD');
+  });
+
   it('degrades: null email, empty library, partial:true', async () => {
     const sb = fakeSb();
     sb.steam.getCurrentUserAsync = async () => ({ accountName: 'l', personaName: 'p', steamId: null, accountId: null, currency: null, balance: null, balanceFormatted: null, isLimited: false, email: async () => undefined, emailValidated: async () => undefined });

@@ -315,7 +315,7 @@ declare global {
     }
   });
 
-  reportUserBinding(steam, fwBridge);
+  reportUserBinding(steam, fwBridge, scope.signal);
   prefetchSetupId(api.app, window as { __SB_BOOSTER_UUID__?: string });
 })();
 

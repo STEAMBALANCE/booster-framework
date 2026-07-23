@@ -1,4 +1,5 @@
 import type { SbApi, OwnedGame, InventoryItem, InventoryAppResult, ParentalState } from './api/api-types';
+import { currencyForStoreCountry } from './steam-internals/country-to-currency';
 
 // Payload builder for the rate-account flow. The WIRE shape is snake_case per
 // the backend contract; we explicitly remap the framework's camelCase
@@ -225,7 +226,7 @@ export async function collectRatePayload(sb: SbApi, now: number): Promise<RatePa
       account_id: n(user.accountId),
       level: n(level),
       country: n(country),
-      currency: n(user.currency),
+      currency: n(user.currency ?? currencyForStoreCountry(country)),
       wallet_balance: n(user.balance),
       wallet_balance_formatted: n(user.balanceFormatted),
       is_limited: !!user.isLimited,

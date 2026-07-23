@@ -196,6 +196,10 @@ manifest-записи плагина.
 `getStoreCountry(): Promise<string | undefined>` — страна магазина аккаунта
 (ISO 3166-1 alpha-2, напр. `'KZ'`; `undefined` до первого захвата или после
 смены аккаунта; никогда не throw),
+`getStoreCurrency(): Promise<string | undefined>` — валюта кошелька (ISO 4217,
+напр. `'USD'`). Каскад: валюта из строки баланса → фолбэк по стране магазина
+(нулевые кошельки USD-региона отдают пустой баланс); читает актуальный кэш при
+каждом вызове; `undefined` вне RU-региона при пустом балансе; никогда не throw'ит,
 `getMachineId(): Promise<MachineId | undefined>` — hardware-derived SHA1 triple
 `{bb3, ff2, b3b}` от Steam's `Auth.GetMachineID()`; `undefined` при недоступности;
 никогда не throw; значения не логируются. Подробнее —

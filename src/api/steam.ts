@@ -3,6 +3,7 @@ import type { Registry } from '../registry';
 import type { Bridge } from '../bridge';
 import { createRelayChannel } from '../relay/channel';
 import { deriveCurrency, parseBalanceNumber } from '../steam-internals/currency-map';
+import { currencyForStoreCountry } from '../steam-internals/country-to-currency';
 import { readCurrentSteamId64FromStoreGlobal, steamId64ToAccountId } from '../steam-internals/steam-id';
 import { DEFAULT_INVENTORY_APPS } from '../steam-internals/inventory';
 
@@ -172,9 +173,9 @@ export function makeSteamApi(registry: Registry, bridge: Bridge, relaySecret?: s
     return callRelay('get-machine-id', {}, 'machine-id-ok', (m) => m.value as MachineId | undefined, undefined);
   }
 
-  function makeSteamUserFromSnapshot(s: SnapshotPayload): SteamUser {
+  function makeSteamUserFromSnapshot(s: SnapshotPayload, currencyOverride?: string): SteamUser {
     const balanceFormatted = s.balanceFormatted;
-    const currency = balanceFormatted ? deriveCurrency(balanceFormatted) : undefined;
+    const currency = currencyOverride ?? (balanceFormatted ? deriveCurrency(balanceFormatted) : undefined);
     const balance  = balanceFormatted ? parseBalanceNumber(balanceFormatted) : undefined;
 
     // Inflight-dedupe for GetAccountSettings: a concurrent email() +
@@ -245,9 +246,11 @@ export function makeSteamApi(registry: Registry, bridge: Bridge, relaySecret?: s
       const snap = msg['snapshot'] as SnapshotPayload | undefined;
       if (!snap || typeof snap.accountName !== 'string') return;
       cachedUser = makeSteamUserFromSnapshot(snap);
-      for (const cb of userChangeListeners) {
-        try { cb(cachedUser); } catch { /* swallow */ }
-      }
+      const built = cachedUser;
+      notifyUserChange();
+      // Fill currency for zero-balance wallets from the store country, then
+      // re-fire (see healCurrencyFromCountry).
+      if (!cachedUser.currency) void healCurrencyFromCountry(snap, built);
       return;
     }
 
@@ -286,6 +289,49 @@ export function makeSteamApi(registry: Registry, bridge: Bridge, relaySecret?: s
       userChangeListeners.add(handler);
       const timer = setTimeout(() => finish(undefined), getStoreCountrySteamIdWaitMs());
     });
+  }
+
+  // Store-country read (native cache via bridge). Shared by getStoreCountry
+  // (polls for a steamId from a cold context) and the currency self-heal
+  // (passes the snapshot's steamId directly — no poll). Never throws.
+  async function fetchStoreCountry(steamIdOverride?: string): Promise<string | undefined> {
+    try {
+      if (!bridge) return undefined;
+      const steamId = steamIdOverride ?? await resolveCurrentSteamId();
+      if (!steamId) return undefined;
+      const r = await bridge.call<{ country: string | null }>('get_store_country', { steamId });
+      return typeof r?.country === 'string' ? r.country : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  // Notify all onUserChange subscribers of the current cachedUser.
+  function notifyUserChange(): void {
+    for (const cb of userChangeListeners) {
+      try { cb(cachedUser); } catch { /* swallow */ }
+    }
+  }
+
+  // Self-heal: a zero-balance wallet emits an empty balance string, so
+  // deriveCurrency yields undefined. Fall back to the store country's currency
+  // (single source of truth stays SteamUser.currency) and re-fire so every
+  // downstream consumer (log, rate-account, checkout popup + addfunds via the
+  // bus) corrects automatically. Reads store country by snap.steamId directly
+  // (the store-country native cache is keyed by steamId — no steamId, nothing
+  // to look up, so skip and avoid the resolveCurrentSteamId 3s poll). Guarded
+  // against the account-switch race and a newer funded snapshot arriving
+  // mid-await.
+  async function healCurrencyFromCountry(snap: SnapshotPayload, built: SteamUser): Promise<void> {
+    if (!snap.steamId) return;
+    const currency = currencyForStoreCountry(await fetchStoreCountry(snap.steamId));
+    if (!currency) return;
+    // Apply only if no newer snapshot has replaced the instance we healed from
+    // (covers account-switch AND a newer same-account snapshot) — reference
+    // identity subsumes the field-level guards.
+    if (cachedUser !== built) return;
+    cachedUser = makeSteamUserFromSnapshot(snap, currency);
+    notifyUserChange();
   }
 
   return {
@@ -357,16 +403,18 @@ export function makeSteamApi(registry: Registry, bridge: Bridge, relaySecret?: s
       });
     },
 
-    async getStoreCountry(): Promise<string | undefined> {
-      try {
-        if (!bridge) return undefined;
-        const steamId = await resolveCurrentSteamId();
-        if (!steamId) return undefined;
-        const r = await bridge.call<{ country: string | null }>('get_store_country', { steamId });
-        return typeof r?.country === 'string' ? r.country : undefined;
-      } catch {
-        return undefined;
-      }
+    getStoreCountry(): Promise<string | undefined> {
+      return fetchStoreCountry();
+    },
+
+    async getStoreCurrency(): Promise<string | undefined> {
+      // 1. Real wallet currency from the balance string (funded wallet; also the
+      //    value the snapshot self-heal fills in for returning users).
+      if (cachedUser?.currency) return cachedUser.currency;
+      // 2. Fallback from the store country, read LIVE each call — so it resolves
+      //    mid-session the moment a store visit has captured the country, even
+      //    when no new snapshot has re-fired the reactive self-heal (new users).
+      return currencyForStoreCountry(await fetchStoreCountry());
     },
 
     getMachineId(): Promise<MachineId | undefined> {

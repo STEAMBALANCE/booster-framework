@@ -476,3 +476,106 @@ test('getStoreCountry resolves undefined (never rejects) if rolled back mid stea
   await expect(p).resolves.toBeUndefined();      // resolves on timeout, no unhandled rejection
   delete process.env['SB_STORE_COUNTRY_STEAMID_WAIT_MS'];
 });
+
+test('self-heals currency from store country for a zero-balance wallet', async () => {
+  const win = new Window();
+  // @ts-expect-error
+  globalThis.window = win;
+  const bridge = { call: async (op: string) => (op === 'get_store_country' ? { country: 'BY' } : {}) } as never;
+  const api = makeSteamApi(createRegistry(), bridge);
+  const seen: (string | undefined)[] = [];
+  api.onUserChange((u) => seen.push(u?.currency));
+
+  const fake = new BroadcastChannel(RELAY_CHANNEL);
+  // No balanceFormatted → deriveCurrency yields undefined (zero/empty wallet).
+  fake.postMessage({ kind: 'user-snapshot', snapshot: { accountName: 'morphiv', steamId: '76561198074501195' } });
+  await new Promise((r) => setTimeout(r, 20));
+
+  expect(api.getCurrentUser()?.currency).toBe('USD');   // healed at the source
+  expect(seen).toContain('USD');                          // onUserChange re-fired with healed value
+  fake.close();
+});
+
+test('does not overwrite a balance-derived currency (funded wallet)', async () => {
+  const win = new Window();
+  // @ts-expect-error
+  globalThis.window = win;
+  // Bridge would say BY→USD, but the balance string already gives RUB — heal must not run.
+  const bridge = { call: async () => ({ country: 'BY' }) } as never;
+  const api = makeSteamApi(createRegistry(), bridge);
+
+  const fake = new BroadcastChannel(RELAY_CHANNEL);
+  fake.postMessage({ kind: 'user-snapshot', snapshot: { accountName: 'u', steamId: '76561198074501195', balanceFormatted: '123,45₽' } });
+  await new Promise((r) => setTimeout(r, 20));
+
+  expect(api.getCurrentUser()?.currency).toBe('RUB');
+  fake.close();
+});
+
+test('leaves currency undefined when store country is out of scope', async () => {
+  const win = new Window();
+  // @ts-expect-error
+  globalThis.window = win;
+  const bridge = { call: async () => ({ country: null }) } as never;   // country unknown
+  const api = makeSteamApi(createRegistry(), bridge);
+
+  const fake = new BroadcastChannel(RELAY_CHANNEL);
+  fake.postMessage({ kind: 'user-snapshot', snapshot: { accountName: 'u', steamId: '76561198074501195' } });
+  await new Promise((r) => setTimeout(r, 20));
+
+  expect(api.getCurrentUser()?.currency).toBeUndefined();
+  fake.close();
+});
+
+test('leaves currency undefined when store country is unmapped', async () => {
+  const win = new Window();
+  // @ts-expect-error
+  globalThis.window = win;
+  const bridge = { call: async () => ({ country: 'US' }) } as never;   // country not in currency map
+  const api = makeSteamApi(createRegistry(), bridge);
+
+  const fake = new BroadcastChannel(RELAY_CHANNEL);
+  fake.postMessage({ kind: 'user-snapshot', snapshot: { accountName: 'u', steamId: '76561198074501195' } });
+  await new Promise((r) => setTimeout(r, 20));
+
+  expect(api.getCurrentUser()?.currency).toBeUndefined();
+  fake.close();
+});
+
+test('getStoreCurrency returns the balance-derived currency when present', async () => {
+  const win = new Window();
+  // @ts-expect-error
+  globalThis.window = win;
+  const api = makeSteamApi(createRegistry(), fakeBridge);
+  const fake = new BroadcastChannel(RELAY_CHANNEL);
+  fake.postMessage({ kind: 'user-snapshot', snapshot: { accountName: 'u', steamId: '76561198074501195', balanceFormatted: '123,45₽' } });
+  await new Promise((r) => setTimeout(r, 5));
+  expect(await api.getStoreCurrency()).toBe('RUB');
+  fake.close();
+});
+
+test('getStoreCurrency falls back to the live store country (zero balance)', async () => {
+  const win = new Window();
+  // @ts-expect-error
+  globalThis.window = win;
+  const bridge = { call: async (op: string) => (op === 'get_store_country' ? { country: 'BY' } : {}) } as never;
+  const api = makeSteamApi(createRegistry(), bridge);
+  const fake = new BroadcastChannel(RELAY_CHANNEL);
+  fake.postMessage({ kind: 'user-snapshot', snapshot: { accountName: 'u', steamId: '76561198074501195' } });
+  await new Promise((r) => setTimeout(r, 5));
+  expect(await api.getStoreCurrency()).toBe('USD');
+  fake.close();
+});
+
+test('getStoreCurrency is undefined when neither balance nor mapped country', async () => {
+  const win = new Window();
+  // @ts-expect-error
+  globalThis.window = win;
+  const bridge = { call: async () => ({ country: null }) } as never;
+  const api = makeSteamApi(createRegistry(), bridge);
+  const fake = new BroadcastChannel(RELAY_CHANNEL);
+  fake.postMessage({ kind: 'user-snapshot', snapshot: { accountName: 'u', steamId: '76561198074501195' } });
+  await new Promise((r) => setTimeout(r, 5));
+  expect(await api.getStoreCurrency()).toBeUndefined();
+  fake.close();
+});

@@ -130,6 +130,7 @@ export function createTestPluginContext(opts: TestPluginContextOptions = {}): {
     async getCurrentUserAsync(): Promise<never> { throw new Error('test: no user'); },
     onUserChange: () => () => {},
     getStoreCountry: async () => undefined,
+    getStoreCurrency: async () => undefined,
     getMachineId: async () => undefined,
     getOwnedGames: async () => ({ games: [], pricesIncluded: false, ready: false, familySharedExcluded: 0 }),
     getInventory: async () => ({ items: [], perApp: [], partial: true }),

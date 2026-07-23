@@ -576,6 +576,14 @@ export interface SteamApi {
    *  - Никогда не reject'ит. Gated под Capability.Steam (как весь sb.steam). */
   getStoreCountry(): Promise<string | undefined>;
 
+  /** Валюта кошелька (ISO 4217, напр. `'USD'`). Каскад: валюта из строки баланса
+   *  (если кошелёк пополнен) → фолбэк по стране магазина (`getStoreCountry`) для
+   *  нулевых кошельков. Читает актуальный кэш при каждом вызове — вызывай в точке
+   *  использования, чтобы поймать страну, захваченную уже после первого снапшота
+   *  (новый юзер, только что зашедший в Магазин). `undefined`, если ни то, ни
+   *  другое не определилось; никогда не throw'ит. Gated под Capability.Steam. */
+  getStoreCurrency(): Promise<string | undefined>;
+
   /** Hardware-derived machine identifier triple from Steam's Auth.GetMachineID().
    *  Returns {bb3, ff2, b3b} or undefined if unavailable. Never rejects.
    *  Gated under Capability.Steam. Values are never logged. */
